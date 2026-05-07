@@ -1,0 +1,40 @@
+# === Web 框架与核心 ===
+fastapi==0.128.2
+uvicorn[standard]==0.40.0
+pydantic==2.12.5
+python-multipart      # [补全] 文件上传必需
+
+# === 网络请求与工具 ===
+Requests==2.32.5
+httpx==0.28.1         # 网关/反代必需
+httpcore              # main.py 直接导入 AsyncConnectionPool
+urllib3==2.6.3
+websockets==16.0
+pycryptodome          # 微信消息加解密
+playwright            # 浏览器自动化 (影巢签到)
+orjson                # HDHive Playwright 客户端 RSC 解析
+slippers-proxy        # SOCKS5 认证代理转接 (按需)
+
+# === 115 网盘核心 (扫出来的) ===
+p115client
+p115pickcode          # drive115_service 直接导入
+p115rsacipher==0.0.1
+cachetools==7.0.0     # p115client 的依赖
+iterutils             # p115client 生活事件迭代器依赖
+
+# === 图像与处理 ===
+Pillow==12.1.0
+numpy==2.4.2
+
+# === 任务与解析 ===
+apscheduler==3.11.2   # 定时任务
+beautifulsoup4==4.14.3
+feedparser            # [补全] RSS 解析必需
+lxml                  # [建议] bs4 解析器，速度更快
+jinja2                # 通知模板渲染
+zhconv                # 中文繁简转换
+cn2an                 # 中文数字与阿拉伯数字互转
+regex                 # 高级正则，core/meta 依赖
+Pinyin2Hanzi          # 拼音转汉字，core/meta 依赖
+anitopy               # 动漫文件名解析，core/meta/metaanime 依赖
+psutil                # 设备性能监控

@@ -1,0 +1,31 @@
+# === 排除敏感配置 ===
+config/*.json
+!config/media_organize_category_rules.json
+config/*.log
+config/*.log.*
+backups/
+
+# === 排除系统与缓存文件 ===
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+.env
+.DS_Store
+*.bak
+*.original
+*备份*
+
+# === IDE ===
+.idea/
+.vscode/
+.claude/
+
+# === 外部项目源码 ===
+MoviePilot-2.10.6/
+MoviePilot-Frontend-2.10.5/
+
+# === 其他 ===
+*.log

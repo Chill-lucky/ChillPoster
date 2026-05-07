@@ -1,0 +1,164 @@
+"""
+HDHive Open API 客户端
+"""
+
+from typing import Any, Literal
+import httpx
+
+from core.configs import global_config
+
+
+class HDHiveAPIError(Exception):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        description: str | None = None,
+        http_status: int | None = None,
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.description = description
+        self.http_status = http_status
+        super().__init__(f"[{code}] {message}" + (f" — {description}" if description else ""))
+
+
+class HDHiveAuthError(HDHiveAPIError):
+    pass
+
+
+class HDHiveForbiddenError(HDHiveAPIError):
+    pass
+
+
+class HDHiveNotFoundError(HDHiveAPIError):
+    pass
+
+
+class HDHiveRateLimitError(HDHiveAPIError):
+    pass
+
+
+class HDHiveInsufficientPointsError(HDHiveAPIError):
+    pass
+
+
+_ERROR_MAP: dict[int, type[HDHiveAPIError]] = {
+    401: HDHiveAuthError,
+    403: HDHiveForbiddenError,
+    404: HDHiveNotFoundError,
+    402: HDHiveInsufficientPointsError,
+    429: HDHiveRateLimitError,
+}
+
+_CODE_MAP: dict[str, type[HDHiveAPIError]] = {
+    "MISSING_API_KEY": HDHiveAuthError,
+    "INVALID_API_KEY": HDHiveAuthError,
+    "DISABLED_API_KEY": HDHiveAuthError,
+    "EXPIRED_API_KEY": HDHiveAuthError,
+    "VIP_REQUIRED": HDHiveForbiddenError,
+    "ENDPOINT_DISABLED": HDHiveForbiddenError,
+    "ENDPOINT_QUOTA_EXCEEDED": HDHiveRateLimitError,
+    "RATE_LIMIT_EXCEEDED": HDHiveRateLimitError,
+    "INSUFFICIENT_POINTS": HDHiveInsufficientPointsError,
+}
+
+
+MediaType = Literal["movie", "tv"]
+
+
+class HDHiveOpenClient:
+    BASE_URL = "https://hdhive.com/api/open"
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        timeout: float = 30.0,
+    ) -> None:
+        self._api_key = api_key
+        proxy = global_config.proxy_url or None
+        self._client = httpx.Client(
+            base_url=self.BASE_URL,
+            headers={"X-API-Key": api_key},
+            timeout=timeout,
+            verify=False,
+            proxy=proxy,
+        )
+
+    def __enter__(self) -> "HDHiveOpenClient":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._client.close()
+
+    @staticmethod
+    def _raise_for_response(resp: httpx.Response) -> None:
+        try:
+            body: dict[str, Any] = resp.json()
+        except Exception:
+            resp.raise_for_status()
+            return
+
+        if body.get("success"):
+            return
+
+        code: str = str(body.get("code", resp.status_code))
+        message: str = body.get("message", "Unknown error")
+        description: str | None = body.get("description")
+        http_status: int = resp.status_code
+
+        exc_cls = _CODE_MAP.get(code) or _ERROR_MAP.get(http_status, HDHiveAPIError)
+        raise exc_cls(code=code, message=message, description=description, http_status=http_status)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: Any = None,
+    ) -> Any:
+        resp = self._client.request(method, path, params=params, json=json)
+        self._raise_for_response(resp)
+        body: dict[str, Any] = resp.json()
+        return body.get("data"), body.get("meta")
+
+    def ping(self) -> dict[str, Any]:
+        data, _ = self._request("GET", "/ping")
+        return data
+
+    def get_quota(self) -> dict[str, Any]:
+        data, _ = self._request("GET", "/quota")
+        return data
+
+    def get_usage(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        data, _ = self._request("GET", "/usage", params=params or None)
+        return data
+
+    def get_usage_today(self) -> dict[str, Any]:
+        data, _ = self._request("GET", "/usage/today")
+        return data
+
+    def get_me(self) -> dict[str, Any]:
+        data, _ = self._request("GET", "/me")
+        return data
+
+    def checkin(self, is_gambler: bool = False) -> dict[str, Any]:
+        body: dict[str, Any] = {}
+        if is_gambler:
+            body["is_gambler"] = True
+        data, _ = self._request("POST", "/checkin", json=body or None)
+        return data

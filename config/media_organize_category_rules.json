@@ -1,0 +1,766 @@
+{
+  "sub_classify": {
+    "movie": {
+      "enabled": true,
+      "levels": [
+        "year_decade"
+      ]
+    },
+    "tv": {
+      "enabled": true,
+      "levels": [
+        "year_decade"
+      ]
+    },
+    "sync_emby_library": true,
+    "emby_server_idx": 0,
+    "emby_library_level": "rule"
+  },
+  "movie": [
+    {
+      "path": "特摄剧/特摄电影",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "-16"
+        },
+        {
+          "field": "include_keywords",
+          "logic": "OR",
+          "value": "tokusatsu,ultraman,kaiju"
+        },
+        {
+          "field": "keywords",
+          "logic": "OR",
+          "value": "奥特曼,特摄,特攝,铠甲勇士,金甲战士,超神战队,巨神战击队,ower Rangers,超凡战队,恐龙战队,VR Troopers,Beetleborgs,BIMA,神鹰勇士,Cicak-Man,Shaktimaan,Darna"
+        }
+      ]
+    },
+    {
+      "path": "纪录片/纪录片电影/华语纪录片电影",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "99,-10402,-16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "zh,cn"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "CN,HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "纪录片/纪录片电影/外语纪录片电影",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "99,-10402,-16"
+        }
+      ]
+    },
+    {
+      "path": "演唱会/华语歌手演唱会",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10402,-16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "zh,cn"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "CN,HK,TW,MO"
+        },
+        {
+          "field": "keywords",
+          "logic": "AND",
+          "value": "演唱会,巡演,演出,交响乐,奇妙夜,歌剧,喜乐会,音乐会,音乐剧,音乐·会,摇滚,MV精选集,特别节目,美丽的呼声听证会,Live,郭富城,日本武道馆,Concert,Tour,Performance,Show,Stage,现场,現場,巡迴,巡回,音乐节,音樂節,歌会,湾区升明月,音乐集,演奏,音乐秀,音乐盛宴,音乐厅"
+        }
+      ]
+    },
+    {
+      "path": "演唱会/欧美歌手演唱会",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10402,-16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "en,es,fr,pt,de,it,nl,ru,pl,sv,da,no,fi,cs,hu,ro,sk,hr,sl,bg,el,lt,lv,et,is,mt,eu,ca,gl,cy,tr,zu,ga,fo,yi"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "US,GB,FR,DE,IT,ES,PT,NL,SE,PL,RU,CA,AU,NZ,NO,DK,FI,GR,TR,IE,IS,CH,BE,LU,MT,ZA,MX"
+        },
+        {
+          "field": "keywords",
+          "logic": "AND",
+          "value": "演唱会,巡演,演出,交响乐,奇妙夜,歌剧,喜乐会,音乐会,音乐·会,音乐剧,特别节目,摇滚,MV精选集,Live,日本武道馆,Concert,Tour,Performance,Show,Stage,现场,現場,巡迴,巡回,音乐节,音樂節,歌会,音乐集,演奏,音乐秀,音乐盛宴,音乐厅"
+        }
+      ]
+    },
+    {
+      "path": "演唱会/日韩歌手演唱会",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10402,-16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ja,ko"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "JP,KR"
+        },
+        {
+          "field": "keywords",
+          "logic": "AND",
+          "value": "Hatsune miku,演唱会,巡演,演出,交响乐,奇妙夜,歌剧,少女时代,初音未来,魔法未来,喜乐会,音乐会,音乐剧,特别节目,摇滚,MV精选集,Live,日本武道馆,Concert,米津玄师,Tour,Performance,Show,Stage,现场,現場,巡迴,巡回,音乐节,音樂節,歌会,音乐集,演奏,音乐秀,音乐盛宴,音乐厅"
+        }
+      ]
+    },
+    {
+      "path": "演唱会/其他演唱会",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10402,-16"
+        },
+        {
+          "field": "keywords",
+          "logic": "AND",
+          "value": "演唱会,巡演,演出,交响乐,奇妙夜,歌剧,喜乐会,音乐会,音乐·会,音乐剧,特别节目,摇滚,MV精选集,Live,日本武道馆,Concert,Tour,Performance,Show,Stage,现场,現場,巡迴,巡回,音乐节,音樂節,歌会,音乐集,演奏,音乐秀,音乐盛宴,音乐厅"
+        }
+      ]
+    },
+    {
+      "path": "动漫/动画电影/港台动画电影",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "16"
+        },
+        {
+          "field": "production_countries",
+          "logic": "AND",
+          "value": "HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "动漫/动画电影/国产动画电影",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "zh,cn"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "CN,HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "动漫/动画电影/日本动画电影",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ja"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "JP"
+        }
+      ]
+    },
+    {
+      "path": "动漫/动画电影/韩国动画电影",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ko"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "KR"
+        }
+      ]
+    },
+    {
+      "path": "动漫/动画电影/欧美动画电影",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "en,es,fr,pt,de,it,nl,ru,pl,sv,da,no,fi,cs,hu,ro,sk,hr,sl,bg,el,lt,lv,et,is,mt,eu,ca,gl,cy,tr,zu,ga,fo,yi"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "US,GB,FR,DE,IT,ES,PT,NL,SE,PL,RU,CA,AU,NZ,NO,DK,FI,GR,TR,IE,IS,CH,BE,LU,MT,ZA,MX"
+        }
+      ]
+    },
+    {
+      "path": "动漫/动画电影/其他动画电影",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "16"
+        }
+      ]
+    },
+    {
+      "path": "晚会",
+      "conditions": [
+        {
+          "field": "series_keywords",
+          "logic": "AND",
+          "value": "中央广播电视总台春节联欢晚会,中央广播电视总台元宵晚会,中央广播电视总台中秋晚会"
+        }
+      ]
+    },
+    {
+      "path": "电影/华语电影/港台地区电影",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "AND",
+          "value": "zh,cn"
+        },
+        {
+          "field": "production_countries",
+          "logic": "AND",
+          "value": "HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "电影/华语电影/大陆地区电影",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "AND",
+          "value": "zh,cn,bo,za"
+        },
+        {
+          "field": "production_countries",
+          "logic": "AND",
+          "value": "CN,HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "电影/日本电影",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ja"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "JP"
+        }
+      ]
+    },
+    {
+      "path": "电影/韩国电影",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ko"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "KR"
+        }
+      ]
+    },
+    {
+      "path": "电影/欧美电影",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "AND",
+          "value": "en,es,fr,pt,de,it,nl,ru,pl,sv,da,no,fi,cs,hu,ro,sk,hr,sl,bg,el,lt,lv,et,is,mt,eu,ca,gl,cy,tr,zu,ga,fo,yi"
+        },
+        {
+          "field": "production_countries",
+          "logic": "AND",
+          "value": "US,GB,FR,DE,IT,ES,PT,NL,SE,PL,RU,CA,AU,NZ,NO,DK,FI,GR,TR,IE,IS,CH,BE,LU,MT,ZA,MX"
+        }
+      ]
+    },
+    {
+      "path": "电影/东南亚电影",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "id,th,ms,hi,tl,vi,gu,kn,kok,mr,pa,sa,ta,te,ur,si,ne,lo,mm,my,kh,bd"
+        },
+        {
+          "field": "production_countries",
+          "logic": "OR",
+          "value": "TH,VN,MY,PH,IN,LA,MM,SG,ID,KP,BD,KH,LK,NP"
+        }
+      ]
+    },
+    {
+      "path": "电影/其他地区电影",
+      "conditions": []
+    }
+  ],
+  "tv": [
+    {
+      "path": "特摄剧/特摄剧集",
+      "conditions": [
+        {
+          "field": "include_keywords",
+          "logic": "OR",
+          "value": "tokusatsu,ultraman"
+        },
+        {
+          "field": "keywords",
+          "logic": "OR",
+          "value": "奥特曼,特摄,特攝,铠甲勇士,金甲战士,超神战队,巨神战击队,布袋戏,苦海女神龙,霹雳神州,霹雳英雄,霹雳震寰宇,霹雳天命,云州大儒侠史艳文,Power Rangers,超凡战队,恐龙战队,VR Troopers,Beetleborgs,BIMA,神鹰勇士,Cicak-Man,Shaktimaan,Darna"
+        }
+      ]
+    },
+    {
+      "path": "纪录片/纪录片剧集/华语纪录片",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "99,-10402,-16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "zh,cn"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "CN,HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "纪录片/纪录片剧集/外语纪录片",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "99,-10402,-16"
+        }
+      ]
+    },
+    {
+      "path": "动漫/儿童动漫/国产儿童动漫",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "+16,10762"
+        },
+        {
+          "field": "keywords",
+          "logic": "OR",
+          "value": "喜羊羊与灰太狼"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "zh,cn"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "CN,HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "动漫/儿童动漫/日本儿童动漫",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "+16,10762"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ja,ko"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "JP,KR"
+        }
+      ]
+    },
+    {
+      "path": "动漫/儿童动漫/欧美儿童动漫",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "+16,10762"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "en,es,fr,pt,de,it,nl,ru,pl,sv,da,no,fi,cs,hu,ro,sk,hr,sl,bg,el,lt,lv,et,is,mt,eu,ca,gl,cy,tr,zu,ga,fo,yi"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "US,GB,FR,DE,IT,ES,PT,NL,SE,PL,RU,CA,AU,NZ,NO,DK,FI,GR,TR,IE,IS,CH,BE,LU,MT,ZA,MX"
+        }
+      ]
+    },
+    {
+      "path": "动漫/儿童动漫/其他儿童动漫",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "+16,10762"
+        }
+      ]
+    },
+    {
+      "path": "动漫/国产动漫",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "zh,cn"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "CN,HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "动漫/日本动漫",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ja,ko"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "JP,KR"
+        }
+      ]
+    },
+    {
+      "path": "动漫/欧美动漫",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "16"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "en,es,fr,pt,de,it,nl,ru,pl,sv,da,no,fi,cs,hu,ro,sk,hr,sl,bg,el,lt,lv,et,is,mt,eu,ca,gl,cy,tr,zu,ga,fo,yi"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "US,GB,FR,DE,IT,ES,PT,NL,SE,PL,RU,CA,AU,NZ,NO,DK,FI,GR,TR,IE,IS,CH,BE,LU,MT,ZA,MX"
+        }
+      ]
+    },
+    {
+      "path": "动漫/其他动漫",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "16"
+        }
+      ]
+    },
+    {
+      "path": "综艺/港台综艺",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10764,10767"
+        },
+        {
+          "field": "origin_country",
+          "logic": "AND",
+          "value": "TW,HK,MO"
+        }
+      ]
+    },
+    {
+      "path": "综艺/国产综艺",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10764,10767"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "zh,cn"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "CN,HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "综艺/日本综艺",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10764,10767"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ja"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "JP"
+        }
+      ]
+    },
+    {
+      "path": "综艺/韩国综艺",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10764,10767"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ko"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "KR"
+        }
+      ]
+    },
+    {
+      "path": "综艺/欧美综艺",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10764,10767"
+        },
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "en,es,fr,pt,de,it,nl,ru,pl,sv,da,no,fi,cs,hu,ro,sk,hr,sl,bg,el,lt,lv,et,is,mt,eu,ca,gl,cy,tr,zu,ga,fo,yi"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "US,GB,FR,DE,IT,ES,PT,NL,SE,PL,RU,CA,AU,NZ,NO,DK,FI,GR,TR,IE,IS,CH,BE,LU,MT,ZA,MX"
+        }
+      ]
+    },
+    {
+      "path": "综艺/其他综艺",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10764,10767"
+        }
+      ]
+    },
+    {
+      "path": "剧集/儿童剧集",
+      "conditions": [
+        {
+          "field": "genre_ids",
+          "logic": "AND",
+          "value": "10762"
+        }
+      ]
+    },
+    {
+      "path": "剧集/港台剧集",
+      "conditions": [
+        {
+          "field": "origin_country",
+          "logic": "AND",
+          "value": "HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "剧集/国产剧集",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "zh,cn"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "CN,HK,TW,MO"
+        }
+      ]
+    },
+    {
+      "path": "剧集/日本剧集",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ja"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "JP"
+        }
+      ]
+    },
+    {
+      "path": "剧集/韩国剧集",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "ko"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "KR"
+        }
+      ]
+    },
+    {
+      "path": "剧集/欧美剧集",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "en,es,fr,pt,de,it,nl,ru,pl,sv,da,no,fi,cs,hu,ro,sk,hr,sl,bg,el,lt,lv,et,is,mt,eu,ca,gl,cy,tr,zu,ga,fo,yi"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "US,GB,FR,DE,IT,ES,PT,NL,SE,PL,RU,CA,AU,NZ,NO,DK,FI,GR,TR,IE,IS,CH,BE,LU,MT,ZA,MX"
+        }
+      ]
+    },
+    {
+      "path": "剧集/东南亚剧集",
+      "conditions": [
+        {
+          "field": "original_language",
+          "logic": "OR",
+          "value": "id,th,ms,hi,tl,vi,gu,kn,kok,mr,pa,sa,ta,te,ur,si,ne,lo,mm,my,kh,bd"
+        },
+        {
+          "field": "origin_country",
+          "logic": "OR",
+          "value": "TH,VN,MY,PH,IN,LA,MM,SG,ID,KP,BD,KH,LK,NP"
+        }
+      ]
+    },
+    {
+      "path": "剧集/其他剧集",
+      "conditions": []
+    }
+  ]
+}
