@@ -145,7 +145,9 @@ class CategoryMatcher:
 
         if field == "genre_ids":
             return self._match_genre_ids(tokens, metadata)
-        if field in ("keywords", "include_keywords"):
+        if field == "keywords":
+            return self._match_keywords(tokens, metadata) or self._match_title_keywords(tokens, metadata)
+        if field == "include_keywords":
             return self._match_keywords(tokens, metadata)
         if field == "series_keywords":
             return self._match_series_keywords(tokens, metadata)
@@ -203,14 +205,17 @@ class CategoryMatcher:
                 return True
         return False
 
-    def _match_series_keywords(self, tokens: list[str], metadata: dict) -> bool:
-        # 匹配媒体标题（title/name/series_details.name）
+    def _match_title_keywords(self, tokens: list[str], metadata: dict) -> bool:
         title = (
             metadata.get("title") or metadata.get("name")
+            or (metadata.get("series_details") or {}).get("title")
             or (metadata.get("series_details") or {}).get("name", "")
             or ""
         ).lower()
         return any(t.lower() in title for t in tokens)
+
+    def _match_series_keywords(self, tokens: list[str], metadata: dict) -> bool:
+        return self._match_title_keywords(tokens, metadata)
 
     def _match_generic(self, field: str, tokens: list[str], metadata: dict) -> bool:
         raw = metadata.get(field)
