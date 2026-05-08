@@ -1821,6 +1821,29 @@ createApp({
             }
         };
 
+        const saveEmbyConfig = async () => {
+            const sourceEmby = ensureSingle302Emby();
+            const modes = sourceEmby.modes || {};
+            const emby = {
+                name: sourceEmby.name || '',
+                url: sourceEmby.url || '',
+                key: sourceEmby.key || '',
+                public_host: sourceEmby.public_host || '',
+                proxy_port: sourceEmby.proxy_port || '',
+                modes: { pickcode: modes.pickcode !== undefined ? !!modes.pickcode : true },
+                preload: true,
+                rapid_play: !!sourceEmby.rapid_play,
+                enabled: true,
+                drive_index: 0,
+            };
+            try {
+                const saveRes = await axios.post('/api/config_302/save_emby', { embys: [emby] });
+                showToast(saveRes.data?.message || 'Emby 配置已保存', 'success');
+            } catch (e) {
+                showToast('保存失败: ' + (e.response?.data?.detail || e.message), 'error');
+            }
+        };
+
         const toggle302Switch = async (event, obj, field) => {
             const newState = event.target.checked;
             const oldState = obj[field];

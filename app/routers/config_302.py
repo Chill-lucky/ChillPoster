@@ -72,6 +72,9 @@ class Config302Payload(BaseModel):
     drives: List[Drive115Config] = []
     embys: List[Emby302Config] = []
 
+class SaveEmbyPayload(BaseModel):
+    embys: List[Emby302Config] = []
+
 class Test115Payload(BaseModel):
     cookie: str
 
@@ -660,6 +663,19 @@ async def save_config_302(config: Config302Payload):
         if topology_result:
             message = '配置已保存，115 一条龙目录已创建'
         return {"status": "success", "message": message, "standard_topology": topology_result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
+
+@router.post("/save_emby")
+async def save_emby_config(payload: SaveEmbyPayload):
+    """仅保存 Emby 配置，不触发一条龙目录创建"""
+    try:
+        data = get_config_302_sync()
+        normalized = [e.dict() for e in payload.embys]
+        data["embys"] = normalized
+        _save_config_302_sync(data)
+        logger.info("[302] Emby 配置已保存")
+        return {"status": "success", "message": "Emby 配置已保存"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
 
