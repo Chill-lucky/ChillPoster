@@ -157,12 +157,19 @@ def restore_defaults():
 # ==========================================
 
 DEFAULT_PROJECT_VERSION = "v1.0.0.1"
+VERSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
 
 
 def get_project_version() -> str:
-    version = os.getenv("CHILLPOSTER_VERSION", DEFAULT_PROJECT_VERSION).strip()
+    version = os.getenv("CHILLPOSTER_VERSION", "").strip()
+    if not version and os.path.exists(VERSION_FILE):
+        try:
+            with open(VERSION_FILE, "r", encoding="utf-8") as f:
+                version = f.read().strip()
+        except Exception:
+            version = ""
     if not version:
-        return DEFAULT_PROJECT_VERSION
+        version = DEFAULT_PROJECT_VERSION
     return version if version.startswith("v") else f"v{version}"
 
 
