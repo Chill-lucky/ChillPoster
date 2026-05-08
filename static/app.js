@@ -6397,7 +6397,7 @@ createApp({
             directUploadImg, handleDirectUpload, applyDirectUpload,
 
             // [新增] 302 配置
-            config302, save302Config, toggle302Switch, importEmbyInfo, add302Drive, remove302Drive,
+            config302, save302Config, saveEmbyConfig, toggle302Switch, importEmbyInfo, add302Drive, remove302Drive,
             add302Emby, remove302Emby,
             test115Cookie, manualCleanup115,
             qrcode115State, open115QrLogin, close115QrLogin, create115QrCode,
