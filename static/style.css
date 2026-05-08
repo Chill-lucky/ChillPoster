@@ -2398,6 +2398,7 @@ input:focus, select:focus, textarea:focus {
 .link-accent { color: var(--accent); }
 .transfer-status-success { color: #4caf50; }
 .transfer-status-error { color: #f44336; }
+.transfer-status-info { color: #3b82f6; }
 .source-badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; color: #fff; font-weight: 600; display: inline-flex; align-items: center; }
 .source-badge-blue { background: #3b82f6; }
 .source-badge-purple { background: #8b5cf6; }

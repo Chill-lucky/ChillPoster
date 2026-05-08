@@ -1116,7 +1116,7 @@
                                             <span>总计 {{ organizeProgress.detail.total || 0 }}</span>
                                             <span class="transfer-status-success">成功 {{ organizeProgress.detail.success || 0 }}</span>
                                             <span class="transfer-status-error">失败 {{ organizeProgress.detail.failed || 0 }}</span>
-                                            <span v-if="organizeProgress.detail.strm" class="source-badge-blue">STRM {{ organizeProgress.detail.strm || 0 }}</span>
+                                            <span v-if="organizeProgress.detail.strm" class="transfer-status-info">STRM {{ organizeProgress.detail.strm || 0 }}</span>
                                         </div>
                                     </div>
 

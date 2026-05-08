@@ -250,14 +250,15 @@ def _try_remove_empty_dir(client, dir_cid: str):
 
 _WRITE_API_PACING_MIN_SECONDS = 0.4
 _WRITE_API_PACING_MAX_SECONDS = 0.8
-_DIRECT_URL_PACING_MIN_SECONDS = 0.5
-_DIRECT_URL_PACING_MAX_SECONDS = 1.0
+_DIRECT_URL_PACING_MIN_SECONDS = 0.4
+_DIRECT_URL_PACING_MAX_SECONDS = 8.0
 _WRITE_API_LOCK = threading.Lock()
 _LAST_WRITE_API_AT = 0.0
 _DIRECT_URL_LOCK = threading.Lock()
 _LAST_DIRECT_URL_AT = 0.0
 _RENAME_LOCK = threading.Lock()
 _DIRECT_URL_REQUEST_TIMEOUT_SECONDS = 10
+_DIRECT_URL_TIMEOUT_MAX_RETRIES = 1
 _WRITE_REQUEST_TIMEOUT_SECONDS = 20
 _WRITE_API_RATE_LIMIT_MAX_RETRIES = 3
 _WRITE_API_RATE_LIMIT_BASE_BACKOFF_SECONDS = 3.0
@@ -369,30 +370,34 @@ async def _run_115_write_request(client, request_name: str, request_factory: Cal
 
 async def _run_115_serial_request(request_name: str, request_factory: Callable[[], Any]):
     global _LAST_DIRECT_URL_AT
-    request_started_at = 0.0
     await asyncio.to_thread(_DIRECT_URL_LOCK.acquire)
     try:
-        now = time.monotonic()
-        pacing_seconds = random.uniform(_DIRECT_URL_PACING_MIN_SECONDS, _DIRECT_URL_PACING_MAX_SECONDS)
-        wait_seconds = pacing_seconds - (now - _LAST_DIRECT_URL_AT)
-        if wait_seconds > 0:
-            await asyncio.sleep(wait_seconds)
-        _LAST_DIRECT_URL_AT = time.monotonic()
+        for attempt in range(_DIRECT_URL_TIMEOUT_MAX_RETRIES + 1):
+            now = time.monotonic()
+            pacing_seconds = random.uniform(_DIRECT_URL_PACING_MIN_SECONDS, _DIRECT_URL_PACING_MAX_SECONDS)
+            wait_seconds = pacing_seconds - (now - _LAST_DIRECT_URL_AT)
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+            _LAST_DIRECT_URL_AT = time.monotonic()
 
-        request_started_at = time.monotonic()
-        result = request_factory()
-        if inspect.isawaitable(result):
-            result = await asyncio.wait_for(result, timeout=_DIRECT_URL_REQUEST_TIMEOUT_SECONDS)
-        if isinstance(result, dict) and not result.get("state", True):
-            raise RuntimeError(f"{request_name}失败: {result}")
-        elapsed = time.monotonic() - request_started_at
-        if request_name == "获取直链":
-            logger.debug(f"[115] {request_name}完成: 请求耗时={elapsed:.2f}s")
-        return result
-    except asyncio.TimeoutError:
-        elapsed = time.monotonic() - request_started_at if request_started_at else 0.0
-        logger.warning(f"[115] {request_name}超时: 请求耗时={elapsed:.2f}s")
-        return {}
+            request_started_at = time.monotonic()
+            try:
+                result = request_factory()
+                if inspect.isawaitable(result):
+                    result = await asyncio.wait_for(result, timeout=_DIRECT_URL_REQUEST_TIMEOUT_SECONDS)
+                if isinstance(result, dict) and not result.get("state", True):
+                    raise RuntimeError(f"{request_name}失败: {result}")
+                elapsed = time.monotonic() - request_started_at
+                if request_name == "获取直链":
+                    logger.debug(f"[115] {request_name}完成: 请求耗时={elapsed:.2f}s")
+                return result
+            except asyncio.TimeoutError:
+                elapsed = time.monotonic() - request_started_at
+                if attempt < _DIRECT_URL_TIMEOUT_MAX_RETRIES:
+                    logger.warning(f"[115] {request_name}超时: 请求耗时={elapsed:.2f}s，准备重试 ({attempt + 1}/{_DIRECT_URL_TIMEOUT_MAX_RETRIES})")
+                    continue
+                logger.warning(f"[115] {request_name}超时: 请求耗时={elapsed:.2f}s")
+                return {}
     finally:
         _DIRECT_URL_LOCK.release()
 
