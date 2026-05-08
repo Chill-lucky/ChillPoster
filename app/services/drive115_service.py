@@ -10,7 +10,7 @@ import random
 import threading
 from cachetools import TTLCache
 from p115client import P115Client
-from app.services.media_organize_115_ops import _run_115_serial_request
+from app.services.media_organize_115_ops import _run_115_serial_request, run_115_write_request_sync
 from p115pickcode import to_id
 from p115client.tool.attr import get_attr
 from app.routers.config_302 import get_config_302
@@ -447,7 +447,11 @@ class Drive115Service:
                 if "/" in dir_name:
                     dir_name = dir_name.split("/")[-1]
 
-                make_resp = client.fs_mkdir(dir_name)  # 默认 pid=0 (根目录)
+                make_resp = run_115_write_request_sync(
+                    client,
+                    "创建复制目标目录",
+                    lambda write_client: write_client.fs_mkdir(dir_name),
+                )  # 默认 pid=0 (根目录)
                 
                 if make_resp and make_resp.get('state'):
                     # 尝试直接从创建结果中拿 ID
@@ -468,7 +472,11 @@ class Drive115Service:
 
             # 3. 执行复制
             logger.debug(f"[Sync-{drive_name}] 开始复制: src_id={src_file_id} -> target_cid={target_cid}")
-            resp = client.fs_copy(src_file_id, target_cid)
+            resp = run_115_write_request_sync(
+                client,
+                "复制文件",
+                lambda write_client: write_client.fs_copy(src_file_id, target_cid),
+            )
             logger.debug(f"[Sync-{drive_name}] 复制响应: state={resp.get('state')}")
             if not resp.get('state'):
                 logger.error(f"[Sync-{drive_name}] 复制失败: state={resp.get('state')}")
@@ -526,7 +534,11 @@ class Drive115Service:
         try:
             client, _ = await self.get_client()
             if client:
-                client.fs_delete(file_id)
+                run_115_write_request_sync(
+                    client,
+                    "删除播放副本",
+                    lambda write_client: write_client.fs_delete(file_id),
+                )
                 logger.debug(f"[CopyOnWrite] 副本已清理: {file_id}")
             else:
                 logger.warning(f"[CopyOnWrite] 删除失败: 无法获取 115 客户端")
@@ -615,7 +627,11 @@ class Drive115Service:
             if not target_cid_info or not target_cid_info.get('id'):
                 # 创建目录
                 dir_name = target_dir.strip("/").split("/")[-1]
-                make_resp = secondary_client.fs_mkdir(dir_name)
+                make_resp = run_115_write_request_sync(
+                    secondary_client,
+                    "创建秒传目标目录",
+                    lambda write_client: write_client.fs_mkdir(dir_name),
+                )
                 if make_resp and make_resp.get('state'):
                     target_cid_info = secondary_client.fs_dir_getid_app(target_dir)
 
@@ -754,13 +770,21 @@ class Drive115Service:
         try:
             # 优先使用 file_id，其次使用 pickcode
             if file_id is not None:
-                secondary_client.fs_delete(file_id)
+                run_115_write_request_sync(
+                    secondary_client,
+                    "删除小号副本",
+                    lambda write_client: write_client.fs_delete(file_id),
+                )
                 logger.debug(f"[Rapid] 小号副本已清理: file_id={file_id}")
             elif pickcode:
                 # p115client 的 fs_delete 也支持 pickcode
                 from p115client import P115Client
                 file_id_to_delete = P115Client.to_id(pickcode)
-                secondary_client.fs_delete(file_id_to_delete)
+                run_115_write_request_sync(
+                    secondary_client,
+                    "删除小号副本",
+                    lambda write_client: write_client.fs_delete(file_id_to_delete),
+                )
                 logger.debug(f"[Rapid] 小号副本已清理: pickcode={pickcode}")
             else:
                 logger.warning(f"[Rapid] 无法删除副本：缺少 file_id 和 pickcode")
@@ -1214,7 +1238,11 @@ class Drive115Service:
                 file_list = resp['data']
                 if not file_list: break
                 fids = [item['fid'] for item in file_list]
-                client.fs_delete(fids)
+                run_115_write_request_sync(
+                    client,
+                    "清理复制目录",
+                    lambda write_client: write_client.fs_delete(fids),
+                )
                 deleted_count += len(fids)
                 logger.debug(f"[CleanUp] 本轮已删除 {len(fids)} 个文件")
                 await asyncio.sleep(0.5)
@@ -1323,7 +1351,13 @@ class Drive115Service:
                 logger.warning(f"[CleanUp] 批量删除失败，1秒后重试: {log_label}")
                 await asyncio.sleep(1)
             try:
-                resp = await asyncio.to_thread(client.fs_delete, ids, async_=False)
+                resp = await asyncio.to_thread(
+                    run_115_write_request_sync,
+                    client,
+                    "清空指定目录",
+                    lambda write_client: write_client.fs_delete(ids, async_=False),
+                    raise_on_state_false=False,
+                )
                 if isinstance(resp, dict) and resp.get("state") is False:
                     raise RuntimeError(resp)
                 return True, None

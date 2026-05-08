@@ -4195,7 +4195,9 @@ createApp({
             await restoreRunningOrganizeTask();
             fetchHdhiveConfig();
             startHdhiveEventStream();
-            loadDiscoverSources();
+            loadDiscoverSources().then(() => {
+                if (tab.value === 'media_subscribe' && !mainGridItems.value.length) loadMainGrid(true);
+            });
 
             try {
                 const res = await axios.get('/api/load');
@@ -6080,11 +6082,111 @@ createApp({
         const mainGridLoading = ref(false);
         const mainGridNoMore = ref(false);
         const mainGridSentinel = ref(null);
+        const mainGridScrollRoot = ref(null);
         let mainGridObserver = null;
+        let mainGridObserverRetryTimer = null;
         let _mainGridGen = 0;
+        const mainGridPrefetch = reactive({ pages: {} });
+        const MAIN_GRID_PREFETCH_AHEAD = 2;
+
+        const isDoubanMainGrid = () => discoverActiveSource.value === 'douban';
+
+        const resetMainGridPrefetch = () => {
+            mainGridPrefetch.pages = {};
+        };
+
+        const fetchMainGridPage = async (source, page) => {
+            const params = { ...(activeSourceFilters.value || {}), page };
+            const res = await axios.get(`/api/discover/provider/${source}`, { params });
+            return res.data || {};
+        };
+
+        const getDisplayableMainGridItems = (items = []) => {
+            if (!isDoubanMainGrid()) return items;
+            return items.filter(item => item?.poster_url);
+        };
+
+        const mainGridPageHasMore = (data, page, rawItems) => {
+            const totalPages = data.total_pages || 1;
+            return !(data.has_more === false || page >= totalPages || !rawItems.length);
+        };
+
+        const pruneMainGridPrefetch = () => {
+            Object.keys(mainGridPrefetch.pages).forEach(key => {
+                const page = Number(key);
+                const entry = mainGridPrefetch.pages[key];
+                if (entry.gen !== _mainGridGen || page <= mainGridPage.value || page > mainGridPage.value + MAIN_GRID_PREFETCH_AHEAD + 1) {
+                    delete mainGridPrefetch.pages[key];
+                }
+            });
+        };
+
+        const prefetchMainGridPage = (page, gen) => {
+            if (!isDoubanMainGrid() || page < 1 || mainGridNoMore.value) return null;
+            const cached = mainGridPrefetch.pages[page];
+            if (cached && cached.gen === gen) {
+                if (cached.ready) return Promise.resolve(cached.data);
+                if (cached.loading) return cached.promise;
+            }
+
+            const source = discoverActiveSource.value;
+            const entry = reactive({
+                page,
+                data: null,
+                loading: true,
+                ready: false,
+                promise: null,
+                gen,
+            });
+            mainGridPrefetch.pages[page] = entry;
+
+            const promise = fetchMainGridPage(source, page)
+                .then(data => {
+                    if (gen !== _mainGridGen || source !== discoverActiveSource.value) return null;
+                    const rawItems = data.items || [];
+                    entry.data = { ...data, items: getDisplayableMainGridItems(rawItems), _rawItemCount: rawItems.length };
+                    entry.ready = true;
+                    return entry.data;
+                })
+                .catch(e => {
+                    if (gen === _mainGridGen) console.error('预取发现网格失败:', e);
+                    delete mainGridPrefetch.pages[page];
+                    return null;
+                })
+                .finally(() => {
+                    if (entry.gen === gen) entry.loading = false;
+                    pruneMainGridPrefetch();
+                });
+            entry.promise = promise;
+            return promise;
+        };
+
+        const prefetchMainGridAhead = (fromPage, gen) => {
+            if (!isDoubanMainGrid() || mainGridNoMore.value) return;
+            for (let offset = 1; offset <= MAIN_GRID_PREFETCH_AHEAD; offset += 1) {
+                prefetchMainGridPage(fromPage + offset, gen);
+            }
+        };
+
+        const consumeMainGridPrefetch = (page) => {
+            const entry = mainGridPrefetch.pages[page];
+            if (!entry || entry.gen !== _mainGridGen || !entry.ready || !entry.data) return false;
+            const data = entry.data;
+            const items = data.items || [];
+            mainGridItems.value.push(...items);
+            mainGridPage.value = page;
+            mainGridTotalPages.value = data.total_pages || 1;
+            mainGridNoMore.value = !mainGridPageHasMore(data, page, Array(data._rawItemCount ?? items.length).fill(null));
+            delete mainGridPrefetch.pages[page];
+            prefetchMainGridAhead(page, _mainGridGen);
+            nextTick(() => setupMainGridObserver());
+            return true;
+        };
+
 
         const loadMainGrid = async (reset = true) => {
             if (reset) {
+                resetMainGridPrefetch();
                 mainGridItems.value = [];
                 mainGridPage.value = 1;
                 mainGridNoMore.value = false;
@@ -6100,19 +6202,20 @@ createApp({
                     return;
                 }
 
-                const params = { ...(activeSourceFilters.value || {}), page: mainGridPage.value };
-                const res = await axios.get(`/api/discover/provider/${source}`, { params });
+                const page = mainGridPage.value;
+                const data = await fetchMainGridPage(source, page);
                 if (gen !== _mainGridGen) return;
-                const items = res.data.items || [];
-                mainGridTotalPages.value = res.data.total_pages || 1;
+                const rawItems = data.items || [];
+                const items = getDisplayableMainGridItems(rawItems);
+                mainGridTotalPages.value = data.total_pages || 1;
+                mainGridPage.value = page;
+                mainGridNoMore.value = !mainGridPageHasMore(data, page, rawItems);
                 if (reset) {
                     mainGridItems.value = items;
                 } else {
                     mainGridItems.value.push(...items);
                 }
-                if (res.data.has_more === false || mainGridPage.value >= mainGridTotalPages.value || !items.length) {
-                    mainGridNoMore.value = true;
-                }
+                if (source === 'douban' && !mainGridNoMore.value) prefetchMainGridAhead(page, gen);
             } catch (e) {
                 console.error('加载发现网格失败:', e);
             } finally {
@@ -6125,23 +6228,44 @@ createApp({
 
         const loadNextMainGridPage = async () => {
             if (mainGridLoading.value || mainGridNoMore.value) return;
-            mainGridPage.value++;
+            const nextPage = mainGridPage.value + 1;
+            if (isDoubanMainGrid()) {
+                if (consumeMainGridPrefetch(nextPage)) return;
+                const pending = mainGridPrefetch.pages[nextPage];
+                if (pending?.loading && pending.promise) {
+                    mainGridLoading.value = true;
+                    await pending.promise;
+                    mainGridLoading.value = false;
+                    if (consumeMainGridPrefetch(nextPage)) return;
+                }
+            }
+            mainGridPage.value = nextPage;
             await loadMainGrid(false);
         };
 
-        const setupMainGridObserver = () => {
+        const setupMainGridObserver = (attempt = 0) => {
             if (mainGridObserver) { mainGridObserver.disconnect(); mainGridObserver = null; }
-            if (!mainGridSentinel.value || mainGridNoMore.value) return;
+            if (mainGridObserverRetryTimer) {
+                clearTimeout(mainGridObserverRetryTimer);
+                mainGridObserverRetryTimer = null;
+            }
+            if (mainGridNoMore.value) return;
+            if (!mainGridSentinel.value) {
+                if (attempt < 8) mainGridObserverRetryTimer = setTimeout(() => setupMainGridObserver(attempt + 1), 80);
+                return;
+            }
             mainGridObserver = new IntersectionObserver((entries) => {
                 if (entries[0].isIntersecting && !mainGridLoading.value && !mainGridNoMore.value) {
                     loadNextMainGridPage();
                 }
-            }, { threshold: 0.1 });
+            }, { root: mainGridScrollRoot.value || null, rootMargin: '900px 0px', threshold: 0.01 });
             mainGridObserver.observe(mainGridSentinel.value);
         };
 
         const resetMainGrid = () => {
             if (mainGridObserver) { mainGridObserver.disconnect(); mainGridObserver = null; }
+            if (mainGridObserverRetryTimer) { clearTimeout(mainGridObserverRetryTimer); mainGridObserverRetryTimer = null; }
+            resetMainGridPrefetch();
             mainGridItems.value = [];
             mainGridPage.value = 1;
             mainGridNoMore.value = false;
@@ -6765,7 +6889,7 @@ createApp({
             switchDiscoverSource, updateSourceFilter, toggleSourceChip, applyNumberFilter,
             loadDiscoverSources,
             mainGridItems, mainGridPage, mainGridTotalPages, mainGridLoading, mainGridNoMore,
-            mainGridSentinel, loadMainGrid, resetMainGrid,
+            mainGridSentinel, mainGridScrollRoot, loadMainGrid, resetMainGrid,
 
             // [新增] 资源转存
             transferInput, transferLoading, transferResult, transferHistory, transferConfig, transferConfigForm, transferDirBrowser, browseTransferDir, selectTransferDir, transferDirUp, applyTransferDir, saveTransferConfig, clearTransferHistory,

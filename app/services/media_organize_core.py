@@ -37,7 +37,7 @@ from app.services.media_organize_115_ops import (
     _get_115_client, _get_115_fs, _list_115_video_files, _iter_115_media_entries,
     _rename_115_file, _rename_115_files_batch, _match_and_move_subtitles, _move_top_dir_to_failed, _move_failed_files_batch,
     _move_matched_subtitles_to_target, _match_and_move_subtitles_batch, _ensure_115_dir_chain_cached,
-    _collect_event_video_sha1s_for_cache, _mkdir_115_dir, _move_115_items,
+    _collect_event_video_sha1s_for_cache, _mkdir_115_dir, _move_115_items, _run_115_write_request_sync,
     _get_115_direct_url, _get_115_direct_urls,
 )
 from app.services.media_organize_tmdb import (
@@ -831,9 +831,17 @@ def _remove_library_candidate(client, candidate: dict, failed_dir_cid: str = "",
             if main_loop is not None:
                 _await_on_main_loop(_move_115_items(client, candidate_id, str(failed_dir_cid)), main_loop)
             else:
-                client.fs_move_app(candidate_id, pid=int(failed_dir_cid), app="android", async_=False)
+                _run_115_write_request_sync(
+                    client,
+                    "移动旧文件到失败目录",
+                    lambda write_client: write_client.fs_move_app(candidate_id, pid=int(failed_dir_cid), app="android", async_=False),
+                )
             return True, "moved_to_failed"
-        client.fs_delete([candidate_id], async_=False)
+        _run_115_write_request_sync(
+            client,
+            "删除旧文件",
+            lambda write_client: write_client.fs_delete([candidate_id], async_=False),
+        )
         return True, "deleted"
     except Exception as e:
         logger.warning(f"[Wash] 处理旧文件失败: id={candidate_id}, err={e}")
@@ -3795,7 +3803,12 @@ async def _cleanup_empty_source_dirs(client, source_cid: str):
                 if delay > 0:
                     await asyncio.sleep(delay)
                 try:
-                    resp = client.fs_delete(ids, async_=False)
+                    resp = _run_115_write_request_sync(
+                        client,
+                        f"清理源目录{log_label}",
+                        lambda write_client: write_client.fs_delete(ids, async_=False),
+                        raise_on_state_false=False,
+                    )
                     if isinstance(resp, dict) and resp.get("state") is False:
                         raise RuntimeError(resp)
                     if attempt > 1:

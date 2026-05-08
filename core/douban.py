@@ -36,8 +36,8 @@ class DoubanApi:
     """
     
     # --- 冷却配置 ---
-    _cooldown_min_seconds: float = 4.0
-    _cooldown_max_seconds: float = 8.0
+    _cooldown_min_seconds: float = 0.8
+    _cooldown_max_seconds: float = 1.5
     _last_request_time: float = 0.0
     _cooldown_lock = threading.Lock()
 

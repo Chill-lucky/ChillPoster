@@ -249,7 +249,11 @@ def _try_remove_empty_dir(client, dir_cid: str):
     try:
         items = list(fs.iterdir(int(dir_cid)))
         if not items:
-            client.fs_delete([int(dir_cid)], async_=False)
+            run_115_write_request_sync(
+                client,
+                "删除空目录",
+                lambda write_client: write_client.fs_delete([int(dir_cid)], async_=False),
+            )
             return
         has_media = any(
             item.get("fc") != "0" and
@@ -257,7 +261,11 @@ def _try_remove_empty_dir(client, dir_cid: str):
             for item in items
         )
         if not has_media:
-            client.fs_delete([int(dir_cid)], async_=False)
+            run_115_write_request_sync(
+                client,
+                "删除非媒体空目录",
+                lambda write_client: write_client.fs_delete([int(dir_cid)], async_=False),
+            )
     except Exception:
         pass
 
@@ -280,6 +288,9 @@ _DIRECT_URL_TIMEOUT_MAX_RETRIES = 1
 _WRITE_REQUEST_TIMEOUT_SECONDS = 20
 _WRITE_API_RATE_LIMIT_MAX_RETRIES = 3
 _WRITE_API_RATE_LIMIT_BASE_BACKOFF_SECONDS = 3.0
+_TREE_SCAN_MIN_INTERVAL_SECONDS = 5.0
+_TREE_SCAN_LOCK = threading.Lock()
+_LAST_TREE_SCAN_FINISHED_AT = 0.0
 
 
 @asynccontextmanager
@@ -314,7 +325,7 @@ def _get_115_rate_limit_backoff_seconds(attempt: int) -> float:
     return _WRITE_API_RATE_LIMIT_BASE_BACKOFF_SECONDS * (2 ** attempt)
 
 
-def _run_115_write_request_sync(
+def run_115_write_request_sync(
     client,
     request_name: str,
     request_factory: Callable[[Any], Any],
@@ -349,7 +360,10 @@ def _run_115_write_request_sync(
         return response
 
 
-async def _run_115_write_request(client, request_name: str, request_factory: Callable[[Any], Any]):
+_run_115_write_request_sync = run_115_write_request_sync
+
+
+async def run_115_write_request(client, request_name: str, request_factory: Callable[[Any], Any]):
     global _LAST_WRITE_API_AT
 
     for attempt in range(_WRITE_API_RATE_LIMIT_MAX_RETRIES + 1):
@@ -418,6 +432,9 @@ async def _run_115_serial_request(request_name: str, request_factory: Callable[[
                 return {}
     finally:
         _DIRECT_URL_LOCK.release()
+
+
+_run_115_write_request = run_115_write_request
 
 
 async def _move_115_items(client, file_ids, target_cid: str):
@@ -1030,7 +1047,11 @@ def _check_and_move(client, file_id, target_cid: str, filename: str, reused: boo
             attr = fs._get_attr_by_id(int(file_id))
             actual_parent = str(attr.get("parent_id", ""))
             if actual_parent != str(target_cid):
-                fs.move(int(file_id), to_dir=int(target_cid))
+                run_115_write_request_sync(
+                    client,
+                    f"{tag}后移动文件",
+                    lambda write_client: _get_115_fs(write_client).move(int(file_id), to_dir=int(target_cid)),
+                )
                 logger.debug(f"[MediaOrganize] {tag}成功: {filename} (已移动到目标目录)")
             else:
                 logger.debug(f"[MediaOrganize] {tag}成功: {filename}")
@@ -1048,14 +1069,22 @@ def _iter_115_media_entries(client, cid: str) -> Iterator[dict]:
     """用 traverse_tree_with_path 递归列出源目录树，只产出视频/字幕条目，不写媒体库缓存。"""
     from p115client.tool.iterdir import traverse_tree_with_path
 
-    with _read_lock:
-        items = list(traverse_tree_with_path(
-            client,
-            cid=int(cid),
-            with_ancestors=True,
-            app="android",
-            max_workers=0,
-        ))
+    global _LAST_TREE_SCAN_FINISHED_AT
+    with _TREE_SCAN_LOCK:
+        elapsed_since_last_scan = time.monotonic() - _LAST_TREE_SCAN_FINISHED_AT
+        if elapsed_since_last_scan < _TREE_SCAN_MIN_INTERVAL_SECONDS:
+            time.sleep(_TREE_SCAN_MIN_INTERVAL_SECONDS - elapsed_since_last_scan)
+        scan_started_at = time.monotonic()
+        with _read_lock:
+            items = list(traverse_tree_with_path(
+                client,
+                cid=int(cid),
+                with_ancestors=True,
+                app="android",
+                max_workers=0,
+            ))
+        _LAST_TREE_SCAN_FINISHED_AT = time.monotonic()
+        logger.debug(f"[MediaOrganize] 目录树遍历完成: cid={cid} 耗时={_LAST_TREE_SCAN_FINISHED_AT - scan_started_at:.2f}s")
 
     for item in items:
         if item.get("is_dir"):

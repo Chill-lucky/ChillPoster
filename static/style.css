@@ -6602,8 +6602,8 @@ input:checked + .ios-slider:before {
     padding: 0 8px;
 }
 
-.mp-main-wrap { min-height: 420px; }
-.mp-search-section { margin-bottom: 18px; }
+.mp-main-wrap { min-height: 420px; margin-top: 18px; }
+.mp-search-section { margin-top: 18px; margin-bottom: 18px; }
 
 .mp-grid {
     display: grid;

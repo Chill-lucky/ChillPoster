@@ -16,7 +16,7 @@ from typing import Optional, Dict, List, Any
 import httpx
 import requests
 from fastapi import APIRouter, Query, HTTPException, Request
-from fastapi.responses import Response, RedirectResponse
+from fastapi.responses import Response, RedirectResponse, StreamingResponse
 
 from core.configs import global_config
 from core import tmdb
@@ -1093,6 +1093,9 @@ def discover_provider(source_key: str, request: Request):
         if isinstance(total, int) and total > 0:
             total_pages = max((total + count - 1) // count, 1)
             has_more = page < total_pages
+        if media_type == "tv" and sort == "T" and not tags and page == 1 and raw_items:
+            has_more = True
+            total_pages = max(total_pages, page + 1)
         result = {
             "source": source_key,
             "items": items,
@@ -1592,7 +1595,8 @@ def _get_douban_img_client() -> httpx.AsyncClient:
     """豆瓣图片专用客户端，不走代理"""
     global _douban_img_client
     if _douban_img_client is None or _douban_img_client.is_closed:
-        _douban_img_client = httpx.AsyncClient(verify=False, timeout=20)
+        limits = httpx.Limits(max_connections=80, max_keepalive_connections=40)
+        _douban_img_client = httpx.AsyncClient(verify=False, timeout=20, limits=limits)
     return _douban_img_client
 
 async def close_img_clients():
@@ -1681,19 +1685,31 @@ async def douban_image_proxy(url: str = Query(..., description="豆瓣图片完�
     client = _get_douban_img_client()
 
     try:
-        resp = await client.get(url, follow_redirects=True,
-                               headers={"Referer": "https://m.douban.com/"})
-        if resp.status_code == 200:
-            content_type = resp.headers.get("content-type", "image/jpeg")
-            img_bytes = resp.content
-            # LRU 淘汰
-            if len(_tmdb_img_cache) >= 500:
-                _tmdb_img_cache.popitem(last=False)
-            _tmdb_img_cache[cache_key] = (img_bytes, content_type, time.time() + 86400)
-            return Response(content=img_bytes, media_type=content_type,
-                          headers={"Cache-Control": "public, max-age=86400"})
-        else:
+        req = client.build_request("GET", url, headers={"Referer": "https://m.douban.com/"})
+        resp = await client.send(req, follow_redirects=True, stream=True)
+        if resp.status_code != 200:
+            await resp.aclose()
             raise HTTPException(502, f"豆瓣图片获取失败: {resp.status_code}")
+
+        content_type = resp.headers.get("content-type", "image/jpeg")
+
+        async def stream_and_cache():
+            chunks = []
+            completed = False
+            try:
+                async for chunk in resp.aiter_bytes():
+                    chunks.append(chunk)
+                    yield chunk
+                completed = True
+            finally:
+                await resp.aclose()
+                if completed and chunks:
+                    if len(_tmdb_img_cache) >= 500:
+                        _tmdb_img_cache.popitem(last=False)
+                    _tmdb_img_cache[cache_key] = (b"".join(chunks), content_type, time.time() + 86400)
+
+        return StreamingResponse(stream_and_cache(), media_type=content_type,
+                                 headers={"Cache-Control": "public, max-age=86400"})
     except httpx.HTTPError as e:
         raise HTTPException(502, f"图片代理请求失败: {e}")
 

@@ -853,7 +853,7 @@
                         </div>
                     </div>
 
-                    <div v-else-if="tab === 'media_subscribe'" key="media_subscribe" class="scroll-view">
+                    <div v-else-if="tab === 'media_subscribe'" key="media_subscribe" class="scroll-view" ref="mainGridScrollRoot">
                         <div class="content-shell discover-shell">
 
                             <div class="mp-discover-shell">
@@ -931,9 +931,9 @@
                                 </div>
                                 <!-- 内容网格 -->
                                 <div v-else-if="mainGridItems.length" class="mp-grid">
-                                    <div v-for="item in mainGridItems" :key="item.id + '_' + (item.source || '')" class="mp-card" @click="openMediaDetail(item)">
+                                    <div v-for="(item, idx) in mainGridItems" :key="item.id + '_' + (item.source || '')" class="mp-card" @click="openMediaDetail(item)">
                                         <div class="mp-poster">
-                                            <img :src="item.poster_url" :alt="item.title" loading="lazy">
+                                            <img :src="item.poster_url" :alt="item.title" :loading="idx < 30 ? 'eager' : 'lazy'">
                                             <span v-if="item.subscribed" class="mp-badge-sub"><i class="fa-solid fa-bell"></i></span>
                                             <span v-else class="mp-badge-type">{{ item.media_type === 'tv' ? '剧集' : '电影' }}</span>
                                             <span v-if="item.rating" class="mp-badge-rating"><i class="fa-solid fa-star"></i> {{ item.rating.toFixed(1) }}</span>

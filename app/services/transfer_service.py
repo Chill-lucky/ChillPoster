@@ -7,6 +7,7 @@ from p115client.util import share_extract_payload
 from app.services.drive115_service import drive115_service
 from app.routers.config_302 import get_config_302
 from core.logger import logger
+from app.services.media_organize_115_ops import run_115_write_request_sync
 
 # 115 链接正则
 RE_115_LINK = re.compile(
@@ -132,7 +133,12 @@ class TransferService:
                                 cid = dir_info["id"]
                             else:
                                 # 目录不存在，创建
-                                mkdir_resp = client.fs_mkdir(part)
+                                mkdir_resp = run_115_write_request_sync(
+                                    client,
+                                    "创建转存目录",
+                                    lambda write_client, part=part: write_client.fs_mkdir(part),
+                                    raise_on_state_false=False,
+                                )
                                 if mkdir_resp and mkdir_resp.get("state"):
                                     dir_info = client.fs_dir_getid_app(current_path)
                                     cid = dir_info.get("id", 0) if dir_info else 0

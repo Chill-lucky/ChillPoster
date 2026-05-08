@@ -9,7 +9,7 @@ from p115client.const import SSOENT_TO_APP
 
 # [新增] 引入日志模块，用于打印配置状态
 from core.logger import logger
-from app.services.media_organize_115_ops import _get_115_client
+from app.services.media_organize_115_ops import _get_115_client, run_115_write_request_sync
 
 # ❌ [重要] 绝对不要在这里导入 task_service，否则会报错 ImportError (循环引用)
 
@@ -304,10 +304,13 @@ def _ensure_115_dir(client: P115Client, parent_cid: int, name: str) -> str:
     if existing_cid:
         return existing_cid
 
-    try:
-        resp = client.fs_mkdir(name, pid=int(parent_cid))
-    except TypeError:
-        resp = client.fs_mkdir(name)
+    def _mkdir(write_client):
+        try:
+            return write_client.fs_mkdir(name, pid=int(parent_cid))
+        except TypeError:
+            return write_client.fs_mkdir(name)
+
+    resp = run_115_write_request_sync(client, "创建配置目录", _mkdir, raise_on_state_false=False)
     if resp and resp.get("state"):
         created_cid = str(resp.get("cid") or resp.get("id") or "")
         if created_cid:
