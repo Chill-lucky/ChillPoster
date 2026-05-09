@@ -10,6 +10,7 @@ venv/
 .gitignore
 .idea
 .vscode
+.claude/
 .DS_Store
 *.bak
 *.original
@@ -28,8 +29,9 @@ config/*.log
 config/app.log
 !config/media_organize_category_rules.json
 
-# 排除本地产生的备份和字体缓存
+# 排除本地产生的备份、测试脚本和字体缓存
 backups/
+test_*.py
 
 # 排除无关的外部项目目录
 MoviePilot-2.10.6/

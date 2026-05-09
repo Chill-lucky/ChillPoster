@@ -51,28 +51,36 @@ def delete_font(payload: dict = Body(...)):
     raise HTTPException(status_code=404)
 
 # --- 布局与模板 ---
+def _list_layout_files() -> dict:
+    layout_files = {}
+    if os.path.exists(LAYOUTS_DIR):
+        for filename in os.listdir(LAYOUTS_DIR):
+            if filename.endswith(".py") and filename != "__init__.py":
+                layout_files[filename[:-3]] = filename
+            elif filename.endswith(".pyc") and filename != "__init__.pyc":
+                layout_files.setdefault(filename[:-4], filename)
+    return layout_files
+
+
 @router.get("/api/layouts")
 def get_layouts():
     layouts_data = {}
-    if os.path.exists(LAYOUTS_DIR):
-        for f in os.listdir(LAYOUTS_DIR):
-            if f.endswith(".py") and f != "__init__.py":
-                module_name = os.path.splitext(f)[0]
-                file_path = os.path.join(LAYOUTS_DIR, f)
-                try:
-                    import importlib.util
-                    spec = importlib.util.spec_from_file_location(module_name, file_path)
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
-                    if hasattr(module, 'get_schema'): 
-                        layouts_data[module_name] = module.get_schema()
-                except Exception as e:
-                    logger.error(f"❌ 加载布局失败 [{f}]: {e}")
+    for module_name, filename in _list_layout_files().items():
+        file_path = os.path.join(LAYOUTS_DIR, filename)
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(module_name, file_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            if hasattr(module, 'get_schema'):
+                layouts_data[module_name] = module.get_schema()
+        except Exception as e:
+            logger.error(f"❌ 加载布局失败 [{filename}]: {e}")
     return {"layouts": layouts_data}
 
 @router.get("/api/templates_v2")
 def get_templates_v2():
-    layouts = [f[:-3] for f in os.listdir(LAYOUTS_DIR) if f.endswith(".py") and f != "__init__.py"] if os.path.exists(LAYOUTS_DIR) else []
+    layouts = list(_list_layout_files())
     all_presets = []
     if os.path.exists(TEMPLATES_DIR):
         for f in os.listdir(TEMPLATES_DIR):

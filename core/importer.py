@@ -555,7 +555,8 @@ class UniversalImporter:
         
         base_dir = os.path.dirname(os.path.abspath(__file__))
         fetcher_script = os.path.join(base_dir, 'maoyan_fetcher.py')
-        
+        if not os.path.exists(fetcher_script):
+            fetcher_script = fetcher_script + 'c'
         if not os.path.exists(fetcher_script):
             logger.error(f"找不到 maoyan_fetcher.py: {fetcher_script}")
             return []
@@ -572,9 +573,8 @@ class UniversalImporter:
 
         try:
             logger.debug("[猫眼] 启动抓取子进程")
-            # 增加超时限制，防止卡死
             subprocess.check_call(cmd, timeout=300)
-            
+
             if os.path.exists(temp_output_file):
                 with open(temp_output_file, 'r', encoding='utf-8') as f:
                     results = json.load(f)
@@ -598,7 +598,7 @@ class UniversalImporter:
             if os.path.exists(temp_output_file):
                 try: os.remove(temp_output_file)
                 except: pass
-        
+
         return []
 
     def _get_from_maoyan(self, url):

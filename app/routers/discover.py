@@ -294,6 +294,8 @@ def _load_reference_module(module_name: str):
     ref_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "discover_plugins")
     file_path = os.path.join(ref_dir, f"{module_name}.py")
     if not os.path.exists(file_path):
+        file_path = file_path + "c"
+    if not os.path.exists(file_path):
         raise FileNotFoundError(file_path)
 
     app_mod = types.ModuleType("app")

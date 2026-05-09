@@ -46,20 +46,25 @@ class PosterEngine:
 
         self.layout_modules = {}
         if os.path.exists(self.layouts_dir):
+            layout_files = {}
             for filename in os.listdir(self.layouts_dir):
                 if filename.endswith(".py") and filename != "__init__.py":
-                    module_name = filename[:-3]
-                    file_path = os.path.join(self.layouts_dir, filename)
-                    try:
-                        spec = importlib.util.spec_from_file_location(module_name, file_path)
-                        module = importlib.util.module_from_spec(spec)
-                        spec.loader.exec_module(module)
-                        if hasattr(module, 'render'):
-                            self.layout_modules[module_name] = module.render
-                        else:
-                            logger.warning(f"    ⚠️ 跳过 {filename}: 未找到 render 函数")
-                    except Exception as e:
-                        logger.error(f"    ❌ 加载失败 {filename}: {e}")
+                    layout_files[filename[:-3]] = filename
+                elif filename.endswith(".pyc") and filename != "__init__.pyc":
+                    layout_files.setdefault(filename[:-4], filename)
+
+            for module_name, filename in layout_files.items():
+                file_path = os.path.join(self.layouts_dir, filename)
+                try:
+                    spec = importlib.util.spec_from_file_location(module_name, file_path)
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    if hasattr(module, 'render'):
+                        self.layout_modules[module_name] = module.render
+                    else:
+                        logger.warning(f"    ⚠️ 跳过 {filename}: 未找到 render 函数")
+                except Exception as e:
+                    logger.error(f"    ❌ 加载失败 {filename}: {e}")
 
         # 缓存到类变量，后续实例直接复用
         PosterEngine._shared_layouts = self.layout_modules

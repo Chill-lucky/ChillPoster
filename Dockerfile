@@ -1,13 +1,100 @@
-# 使用轻量级 Python 基础镜像
+# 前端阶段：压缩静态脚本，降低浏览器端代码可读性
+FROM --platform=$BUILDPLATFORM node:22-slim AS frontend
+
+WORKDIR /src
+COPY static ./static
+RUN mkdir -p /protected-static \
+    && cp -a static/. /protected-static/ \
+    && npx --yes terser@5 static/app.js --compress --mangle --comments false --output /protected-static/app.js
+
+# 构建阶段：包含源码，仅用于生成受保护运行目录
+FROM --platform=$BUILDPLATFORM python:3.12-slim AS builder
+
+WORKDIR /src
+
+COPY . .
+COPY config/media_organize_category_rules.json config/media_organize_category_rules.json
+
+RUN python - <<'PY'
+from pathlib import Path
+import py_compile
+import shutil
+
+src = Path('/src')
+out = Path('/protected')
+
+if out.exists():
+    shutil.rmtree(out)
+out.mkdir(parents=True)
+
+copy_dirs = ['templates', 'fonts']
+for name in copy_dirs:
+    path = src / name
+    if path.exists():
+        shutil.copytree(path, out / name)
+
+for name in ['static', 'config', 'backups', 'layouts', 'defaults']:
+    (out / name).mkdir(parents=True, exist_ok=True)
+
+rules = src / 'config' / 'media_organize_category_rules.json'
+if rules.exists():
+    (out / 'config').mkdir(parents=True, exist_ok=True)
+    shutil.copy2(rules, out / 'config' / rules.name)
+
+for name in ['requirements.txt']:
+    path = src / name
+    if path.exists():
+        shutil.copy2(path, out / name)
+
+for folder in ['app', 'core']:
+    base = src / folder
+    if base.exists():
+        for path in base.rglob('*'):
+            rel = path.relative_to(src)
+            if path.is_dir():
+                (out / rel).mkdir(parents=True, exist_ok=True)
+            elif path.suffix == '.py':
+                target = out / rel.with_suffix(path.suffix + 'c')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                py_compile.compile(str(path), cfile=str(target), doraise=True)
+            elif '__pycache__' not in path.parts:
+                target = out / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target)
+
+for name in ['main.py', 'client.py', 'config_manager.py', 'constants.py', 'utils.py']:
+    path = src / name
+    if path.exists():
+        py_compile.compile(str(path), cfile=str(out / f'{name}c'), doraise=True)
+
+layouts = src / 'layouts'
+if layouts.exists():
+    for path in layouts.iterdir():
+        if path.is_file() and path.suffix == '.py' and path.name != '__init__.py':
+            py_compile.compile(str(path), cfile=str(out / 'layouts' / f'{path.name}c'), doraise=True)
+        elif path.is_file() and path.name != '__init__.py':
+            shutil.copy2(path, out / 'layouts' / path.name)
+
+for folder in ['config', 'templates', 'layouts', 'fonts']:
+    source = out / folder
+    target = out / 'defaults' / folder
+    target.mkdir(parents=True, exist_ok=True)
+    if source.exists():
+        for item in source.iterdir():
+            dest = target / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dest)
+PY
+
+# 运行阶段：只复制编译后的代码与资源，不包含源码层
 FROM python:3.12-slim
 
-# 设置工作目录
 WORKDIR /app
 
-# [新增] 设置环境变量：防止生成 .pyc 文件，确保日志即时输出
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-# [新增] 设置默认时区为上海，这对 Cron 调度器非常重要！
 ENV TZ=Asia/Shanghai
 ARG CHILLPOSTER_VERSION=vdev
 ARG BUILD_DATE
@@ -15,8 +102,6 @@ LABEL org.opencontainers.image.version=$CHILLPOSTER_VERSION
 LABEL org.opencontainers.image.created=$BUILD_DATE
 RUN echo "$CHILLPOSTER_VERSION" > /app/VERSION
 
-# 安装系统依赖
-# [修改] 增加了 tzdata 用于处理时区
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     ffmpeg \
@@ -36,34 +121,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制依赖清单并安装
-COPY requirements.txt .
-# 这一步会安装 apscheduler (前提是你更新了 requirements.txt)
+COPY --from=builder /protected/requirements.txt .
 RUN pip install --no-cache-dir --default-timeout=300 -r requirements.txt
-
-# 安装 Playwright Chromium 浏览器（影巢签到需要）
 RUN playwright install --with-deps chromium
 
-# 复制项目所有文件
-COPY . .
-# 单独复制默认分类规则（确保不被 .dockerignore 排除）
-COPY config/media_organize_category_rules.json config/media_organize_category_rules.json
+COPY --from=builder /protected/ .
+COPY --from=frontend /protected-static/ static/
 
-# =======================================================
-# [核心操作] 制作“默认预设”
-# =======================================================
-# 确保所有文件夹都存在，避免 cp 报错
-RUN mkdir -p config fonts templates layouts backups defaults/config defaults/templates defaults/layouts defaults/fonts \
-    && cp -r config/* defaults/config/ 2>/dev/null || : \
-    && cp -r templates/* defaults/templates/ 2>/dev/null || : \
-    && cp -r layouts/* defaults/layouts/ 2>/dev/null || : \
-    && cp -r fonts/* defaults/fonts/ 2>/dev/null || :
-
-# 暴露端口
 EXPOSE 5256
-
-# 设置数据卷
 VOLUME ["/app/config", "/app/templates", "/app/layouts", "/app/fonts", "/app/backups"]
-
-# 启动命令
-CMD ["python", "main.py"]
+CMD ["python", "main.pyc"]
