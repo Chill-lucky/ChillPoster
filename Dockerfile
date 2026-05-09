@@ -67,6 +67,8 @@ for name in ['main.py', 'client.py', 'config_manager.py', 'constants.py', 'utils
     if path.exists():
         py_compile.compile(str(path), cfile=str(out / f'{name}c'), doraise=True)
 
+(out / 'main.py').write_text("import runpy\nrunpy.run_path('/app/main.pyc', run_name='__main__')\n", encoding='utf-8')
+
 layouts = src / 'layouts'
 if layouts.exists():
     for path in layouts.iterdir():
