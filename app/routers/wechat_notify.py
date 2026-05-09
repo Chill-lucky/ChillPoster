@@ -238,17 +238,17 @@ async def wechat_callback_message(request: Request):
         if not content:
             return PlainTextResponse("success")
 
-        # 提取 115 链接
+        # 提取资源链接
         links = transfer_service.extract_links(content)
         if not links:
             return PlainTextResponse("success")
 
-        logger.info(f"[WeChat] 收到 {len(links)} 条 115 链接，开始转存...")
+        logger.info(f"[WeChat] 收到 {len(links)} 条资源链接，开始处理...")
 
         # 异步处理转存（不阻塞微信回调响应）
         async def _process_and_notify():
-            for link in links:
-                result = await transfer_service.process_link(link, source="wechat")
+            results = await transfer_service.process_links(links, source="wechat")
+            for result in results:
                 send_to_all_channels(
                     title=result.get("status", "转存"),
                     description=result.get("message", ""),

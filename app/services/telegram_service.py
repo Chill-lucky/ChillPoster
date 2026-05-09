@@ -600,23 +600,23 @@ class TelegramNotifyService:
         if not text:
             return
 
-        # 提取 115 链接
+        # 提取资源链接
         from app.services.transfer_service import transfer_service
         links = transfer_service.extract_links(text)
         if not links:
             return
 
         chat_id = str(msg.get("chat", {}).get("id", ""))
-        logger.info(f"[Telegram通知] 收到 {len(links)} 条 115 链接 (chat={chat_id})")
+        logger.info(f"[Telegram通知] 收到 {len(links)} 条资源链接 (chat={chat_id})")
 
         # 同步处理转存（polling 在后台线程中）
         import asyncio
         loop = asyncio.new_event_loop()
         try:
-            for link in links:
-                result = loop.run_until_complete(
-                    transfer_service.process_link(link, source="telegram")
-                )
+            results = loop.run_until_complete(
+                transfer_service.process_links(links, source="telegram")
+            )
+            for result in results:
                 # 回复发消息者
                 reply = result.get("message", "转存完成")
                 self.send_message(reply, chat_id=chat_id)

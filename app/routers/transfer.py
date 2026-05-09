@@ -33,10 +33,8 @@ async def manual_transfer(req: ManualTransferRequest):
             # 可能是纯 share_code 格式
             all_links.append(line)
 
-    results = []
-    for lnk in all_links:
-        result = await transfer_service.process_link(lnk, source="manual")
-        results.append(result)
+    results = await transfer_service.process_links(all_links, source="manual")
+    for result in results:
         # 发送转存通知到所有启用的渠道
         send_to_all_channels(
             title=result.get("status", "转存"),
