@@ -86,9 +86,9 @@ class WeChatCrypto:
         # 获取消息长度
         xml_len = socket.ntohl(struct.unpack("I", content[:4].encode('latin-1'))[0])
         # 获取消息内容
-        xml_content = content[4:4 + xml_len]
+        xml_content = content[4:4 + xml_len].encode('latin-1').decode('utf-8')
         # 获取 corp_id
-        from_corp_id = content[4 + xml_len:]
+        from_corp_id = content[4 + xml_len:].encode('latin-1').decode('utf-8')
 
         if from_corp_id != self.corp_id:
             raise Exception("Corp ID 不匹配")
