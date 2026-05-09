@@ -122,6 +122,7 @@ createApp({
             { id: 'config_moviepilot', icon: 'fa-plane', label: 'MoviePilot', group: '核心配置' },
             { id: 'config_proxy', icon: 'fa-globe', label: '代理配置', group: '核心配置' },
             { id: 'config_tmdb', icon: 'fa-database', label: 'TMDB 配置', group: '核心配置' },
+            { id: 'upgrade', icon: 'fa-cloud-arrow-up', label: '系统升级', group: '核心配置' },
             { id: 'account', icon: 'fa-user-gear', label: '账户管理', group: '核心配置' },
         ];
 
@@ -156,6 +157,7 @@ createApp({
             'config_moviepilot',
             'config_proxy',
             'config_tmdb',
+            'upgrade',
             'account',
         ]);
 
@@ -395,22 +397,18 @@ createApp({
             checking: false,
             upgrading: false,
             waitingRestart: false,
-            enabled: false,
+            enabled: true,
             available: false,
-            mode: 'auto',
-            selected_mode: '',
+            mode: 'docker',
+            selected_mode: 'docker',
             current_version: '',
             latest_version: '',
             update_available: false,
             image: '',
-            compose_available: false,
             docker_available: false,
-            compose_service: '',
-            compose_file_configured: false,
             container_id: '',
             message: ''
         });
-        const upgradeForm = reactive({ password: '', confirm: '', mode: 'auto' });
 
         const loadProjectVersion = async () => {
             try {
@@ -426,9 +424,6 @@ createApp({
                     ? await axios.post('/api/upgrade/check', { force: true })
                     : await axios.get('/api/upgrade/status');
                 Object.assign(upgradeStatus, res.data || {});
-                if (upgradeStatus.mode && ['auto', 'compose', 'docker'].includes(upgradeStatus.mode)) {
-                    upgradeForm.mode = upgradeStatus.mode;
-                }
             } catch (e) {
                 upgradeStatus.available = false;
                 upgradeStatus.message = e.response?.data?.detail || e.message || '升级状态获取失败';
@@ -478,8 +473,6 @@ createApp({
                         projectVersion.value = nextVersion;
                         upgradeStatus.waitingRestart = false;
                         upgradeStatus.upgrading = false;
-                        upgradeForm.password = '';
-                        upgradeForm.confirm = '';
                         await fetchUpgradeStatus(true);
                         showToast(nextVersion !== previousVersion ? `升级完成: ${nextVersion}` : '服务已恢复，版本未变化', nextVersion !== previousVersion ? 'success' : 'info');
                         return;
@@ -496,18 +489,12 @@ createApp({
         };
 
         const startUpgrade = async () => {
-            if (!upgradeForm.password) return showToast('请输入当前管理员密码', 'error');
-            if (upgradeForm.confirm !== 'UPGRADE' && upgradeForm.confirm !== '确认升级') return showToast('请输入 UPGRADE 确认升级', 'error');
-            const ok = await showConfirm('系统升级', '升级会拉取新镜像并重建容器，页面会短暂断开。确定继续吗？', 'warning');
+            const ok = await showConfirm('系统升级', '将拉取最新镜像并使用 Docker 直接模式重建当前容器，页面会短暂断开。确定继续吗？', 'warning');
             if (!ok) return;
             upgradeStatus.upgrading = true;
             const previousVersion = projectVersion.value;
             try {
-                const res = await axios.post('/api/upgrade/start', {
-                    password: upgradeForm.password,
-                    confirm: upgradeForm.confirm,
-                    mode: upgradeForm.mode || 'auto'
-                });
+                const res = await axios.post('/api/upgrade/start', {});
                 showToast(res.data?.message || '升级任务已启动', 'info');
                 waitForUpgradeRestart(previousVersion, res.data?.run_id || '');
             } catch (e) {
@@ -515,13 +502,6 @@ createApp({
                 showToast('升级启动失败: ' + (e.response?.data?.detail || e.message), 'error');
             }
         };
-
-        const upgradeModeLabel = computed(() => {
-            const mode = upgradeStatus.selected_mode || upgradeStatus.mode || 'auto';
-            if (mode === 'compose') return 'Docker Compose';
-            if (mode === 'docker') return 'Docker 直接';
-            return '自动选择';
-        });
 
         // ==========================================
         // 1. Toast 通知系统
@@ -4031,7 +4011,7 @@ createApp({
             if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 50) {
                 const tabs = ['dashboard', 'manual', 'custom', 'auto', 'rss', 'webhook',
                              'media_subscribe', 'library_preview', 'server', 'config_115', 'fonts',
-                             'templates', 'translations', 'config_moviepilot', 'account'];
+                             'templates', 'translations', 'config_moviepilot', 'upgrade', 'account'];
                 const currentIndex = tabs.indexOf(tab.value);
 
                 if (diffX > 0 && currentIndex > 0) {
@@ -4085,6 +4065,7 @@ createApp({
                 'rss': 'RSS 真实库', 'webhook': 'Webhook', 'config_302': '302 配置',
                 'server':'Emby 配置', 'fonts':'字体库', 'templates':'模板管理',
                 'library_preview':'封面备份', 'translations':'翻译配置', 'account':'账户管理',
+                'upgrade': '系统升级',
                 'media_subscribe': '发现推荐', 'resource_transfer': '资源转存',
                 'media_organize': '媒体整理', 'media_organize_rules': '二级分类规则', 'strm_generate': 'STRM 生成',
                 'drive115_cleanup': '115 定时清空',
@@ -6873,7 +6854,7 @@ createApp({
             selectState, handleSelect, closeSelectDialog,
             numberDialogState, handleNumberDialog, closeNumberDialog,
             projectVersion, currentUsername, stopTask,
-            upgradeStatus, upgradeForm, fetchUpgradeStatus, checkUpgrade, startUpgrade, upgradeModeLabel,
+            upgradeStatus, fetchUpgradeStatus, checkUpgrade, startUpgrade,
             cleanup115Tasks, cleanup115Form, cleanup115EditingId, showCreate115Cleanup, cleanup115Browser,
             fetch115CleanupTasks, openCreate115Cleanup, reset115CleanupForm, save115CleanupTask, edit115CleanupTask,
             delete115CleanupTask, toggle115CleanupTask, run115CleanupTask, open115CleanupBrowser, select115CleanupDir,
