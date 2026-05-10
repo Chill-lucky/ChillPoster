@@ -1032,7 +1032,7 @@ class EmbyClient:
     def get_recently_added_items(self, limit: int | None = None) -> list:
         uid = self._get_user_id()
         endpoint = f"emby/Users/{uid}/Items" if uid else "emby/Items"
-        scan_limit = min(max((limit or 20) * 20, 200), 1000)
+        scan_limit = min(max((limit or 20) * 2, 100), 1000)
         params = {
             "Recursive": "true",
             "IncludeItemTypes": "Movie,Episode",
@@ -1046,26 +1046,50 @@ class EmbyClient:
             items = data.get("Items", []) if isinstance(data, dict) else []
             result = []
             series_cache = {}
-            series_order = []
-            series_entries = {}
+
+            def series_info_for(series_id):
+                if not series_id:
+                    return {}
+                if series_id not in series_cache:
+                    series_cache[series_id] = self.get_item_info(series_id) or {}
+                return series_cache.get(series_id) or {}
+
+            def format_episode_label(season, episode):
+                try:
+                    season_text = f"S{int(season):02d}"
+                except Exception:
+                    season_text = "S??"
+                try:
+                    episode_text = f"E{int(episode):02d}"
+                except Exception:
+                    episode_text = "E??"
+                return f"{season_text}{episode_text}"
 
             for item in items:
+                if limit and len(result) >= limit:
+                    break
+
+                item_id = item.get("Id")
+                if not item_id:
+                    continue
+
                 item_type = item.get("Type", "")
                 date_created = item.get("DateCreated", "")
+                image_tags = item.get("ImageTags", {}) or {}
+                backdrop_tags = item.get("BackdropImageTags") or []
+                poster_url = None
+                backdrop_url = None
+
+                if "Primary" in image_tags:
+                    poster_url = f"{self.public_host}/emby/Items/{item_id}/Images/Primary?tag={image_tags['Primary']}&quality=90&maxHeight=500"
+                if backdrop_tags:
+                    backdrop_url = f"{self.public_host}/emby/Items/{item_id}/Images/Backdrop/0?tag={backdrop_tags[0]}&quality=90&maxWidth=1280"
+                elif "Backdrop" in image_tags:
+                    backdrop_url = f"{self.public_host}/emby/Items/{item_id}/Images/Backdrop/0?tag={image_tags['Backdrop']}&quality=90&maxWidth=1280"
 
                 if item_type == "Movie":
-                    image_tags = item.get("ImageTags", {})
-                    backdrop_tags = item.get("BackdropImageTags") or []
-                    poster_url = None
-                    backdrop_url = None
-                    if "Primary" in image_tags:
-                        poster_url = f"{self.public_host}/emby/Items/{item['Id']}/Images/Primary?tag={image_tags['Primary']}&quality=90&maxHeight=500"
-                    if backdrop_tags:
-                        backdrop_url = f"{self.public_host}/emby/Items/{item['Id']}/Images/Backdrop/0?tag={backdrop_tags[0]}&quality=90&maxWidth=1280"
-                    elif "Backdrop" in image_tags:
-                        backdrop_url = f"{self.public_host}/emby/Items/{item['Id']}/Images/Backdrop/0?tag={image_tags['Backdrop']}&quality=90&maxWidth=1280"
                     result.append({
-                        "id": item.get("Id"),
+                        "id": item_id,
                         "title": item.get("Name", "未知媒体"),
                         "year": self._normalize_year_value(item.get("ProductionYear", "")),
                         "type": "Movie",
@@ -1079,52 +1103,34 @@ class EmbyClient:
                     })
                 elif item_type == "Episode":
                     series_id = item.get("SeriesId")
+                    series_info = series_info_for(series_id)
                     season = item.get("ParentIndexNumber")
                     episode = item.get("IndexNumber")
-                    if not series_id:
-                        continue
+                    if not poster_url:
+                        poster_url = series_info.get("poster_url")
+                    if not poster_url and series_id:
+                        poster_url = f"{self.public_host}/emby/Items/{series_id}/Images/Primary?quality=90&maxHeight=500"
+                    if not backdrop_url:
+                        backdrop_url = series_info.get("backdrop_url")
 
-                    entry = series_entries.get(series_id)
-                    if entry is None:
-                        if series_id not in series_cache:
-                            series_cache[series_id] = self.get_item_info(series_id) or {}
-                        series_info = series_cache.get(series_id) or {}
-                        entry = {
-                            "id": series_id,
-                            "title": series_info.get("name") or item.get("SeriesName") or item.get("Name", "未知媒体"),
-                            "year": self._normalize_year_value(series_info.get("year", "")),
-                            "type": "Series",
-                            "media_type": "tv",
-                            "poster_url": series_info.get("poster_url"),
-                            "backdrop_url": series_info.get("backdrop_url"),
-                            "overview": series_info.get("overview", "") or "",
-                            "rating": series_info.get("community_rating"),
-                            "genres": series_info.get("genres", ""),
-                            "date_created": date_created,
-                            "_season_map": {}
-                        }
-                        series_entries[series_id] = entry
-                        series_order.append(series_id)
-
-                    if season is not None and episode is not None:
-                        try:
-                            season_num = int(season)
-                            episode_num = int(episode)
-                            entry["_season_map"].setdefault(season_num, []).append(episode_num)
-                        except Exception:
-                            pass
-
-                if limit and len(result) + len(series_order) >= limit:
-                    break
-
-            for series_id in series_order:
-                entry = series_entries.get(series_id)
-                if not entry:
-                    continue
-                episode_label, episode_groups = self._build_episode_label(entry.pop("_season_map", {}))
-                entry["episode_label"] = episode_label
-                entry["episode_groups"] = episode_groups
-                result.append(entry)
+                    result.append({
+                        "id": item_id,
+                        "title": series_info.get("name") or item.get("SeriesName") or item.get("Name", "未知媒体"),
+                        "episode_title": item.get("Name", ""),
+                        "year": self._normalize_year_value(series_info.get("year") or item.get("ProductionYear", "")),
+                        "type": "Episode",
+                        "media_type": "tv",
+                        "series_id": series_id,
+                        "season": season,
+                        "episode": episode,
+                        "episode_label": format_episode_label(season, episode),
+                        "poster_url": poster_url,
+                        "backdrop_url": backdrop_url,
+                        "overview": item.get("Overview", "") or series_info.get("overview", "") or "",
+                        "rating": series_info.get("community_rating") or item.get("CommunityRating"),
+                        "genres": series_info.get("genres") or (", ".join(item.get("Genres", [])) if item.get("Genres") else ""),
+                        "date_created": date_created
+                    })
 
             result.sort(key=lambda x: self._parse_emby_datetime(x.get("date_created")), reverse=True)
             return result[:limit] if limit else result

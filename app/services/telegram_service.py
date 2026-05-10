@@ -83,6 +83,10 @@ class TelegramNotifyService:
         self._save_config()
         # 重新加载代理
         self._load_proxies()
+        if self.config.get("enabled") and self.config.get("bot_token"):
+            self.start_polling()
+        else:
+            self.stop_polling()
 
     def get_config(self) -> dict:
         """获取配置"""

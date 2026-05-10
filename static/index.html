@@ -403,7 +403,7 @@
                                         </div>
                                         <div class="recent-media-meta">
                                             <div class="recent-media-title">{{ item.title }}</div>
-                                            <div class="recent-media-sub">{{ item.year || '未知年份' }} · {{ item.media_type === 'tv' ? (item.episode_label || '剧集') : '电影' }}</div>
+                                            <div class="recent-media-sub">{{ item.year || '未知年份' }} · {{ item.media_type === 'tv' ? ((item.episode_label || '剧集') + (item.episode_title ? ' · ' + item.episode_title : '')) : '电影' }}</div>
                                         </div>
                                     </div>
                                 </div>
@@ -4004,6 +4004,6 @@
 
         <!-- 移动端抽屉菜单 (已移除，使用滑动导航栏替代) -->
 
-    </div> <script src="/static/app.js?v=20260509b"></script>
+    </div> <script src="/static/app.js?v=20260510a"></script>
 </body>
 </html>
