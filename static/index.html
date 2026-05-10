@@ -397,13 +397,13 @@
                                 </div>
                                 <div v-if="dashboardRecentItems.length === 0" class="dashboard-empty-state">暂无最近入库媒体</div>
                                 <div v-else class="recent-media-row">
-                                    <div v-for="item in dashboardRecentItems" :key="item.id" class="recent-media-item" @click="openDashboardItem(item)">
+                                    <div v-for="item in dashboardRecentItems" :key="item.card_id || item.id" class="recent-media-item" @click="openDashboardItem(item)">
                                         <div class="recent-media-poster">
                                             <img v-if="item.poster_url" :src="item.poster_url" :alt="item.title" loading="lazy">
                                         </div>
                                         <div class="recent-media-meta">
                                             <div class="recent-media-title">{{ item.title }}</div>
-                                            <div class="recent-media-sub">{{ item.year || '未知年份' }} · {{ item.media_type === 'tv' ? ((item.episode_label || '剧集') + (item.episode_title ? ' · ' + item.episode_title : '')) : '电影' }}</div>
+                                            <div class="recent-media-sub">{{ item.year || '未知年份' }} · {{ item.media_type === 'tv' ? (item.episode_label || '剧集') : '电影' }}</div>
                                         </div>
                                     </div>
                                 </div>
