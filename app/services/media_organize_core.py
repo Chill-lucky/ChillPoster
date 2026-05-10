@@ -320,6 +320,44 @@ def _profiles_match_for_batch(base: dict, incoming: dict) -> bool:
 
 
 
+def _make_ffprobe_sample_profile(probe_fields: dict, ext: str, sample_count: int = 1) -> dict:
+    return {
+        **(probe_fields or {}),
+        "ext": str(ext or "").lower(),
+        "sample_count": int(sample_count or 1),
+    }
+
+
+
+def _is_ffprobe_size_anomaly_reason(reason: str) -> bool:
+    return str(reason or "") in {"size_outlier", "size_outlier_strong"}
+
+
+
+def _append_ffprobe_batch_size(batch_sizes: list[int], size: int) -> None:
+    if int(size or 0) > 0:
+        batch_sizes.append(int(size or 0))
+
+
+
+def _record_ffprobe_segment_sample(segment_state: dict | None, sampled_profile: dict, size: int) -> tuple[dict, bool]:
+    if not segment_state or not _profiles_match_for_batch(segment_state.get("profile") or {}, sampled_profile):
+        return {
+            "profile": _make_ffprobe_sample_profile(sampled_profile, sampled_profile.get("ext", ""), 1),
+            "sizes": [int(size or 0)] if int(size or 0) > 0 else [],
+        }, bool(segment_state)
+
+    profile = segment_state.get("profile") or {}
+    sample_count = int(profile.get("sample_count", 0) or 0)
+    sizes = list(segment_state.get("sizes") or [])
+    _append_ffprobe_batch_size(sizes, int(size or 0))
+    return {
+        "profile": _merge_ffprobe_profiles(profile, {**sampled_profile, "sample_count": sample_count + 1}),
+        "sizes": sizes,
+    }, False
+
+
+
 def _is_ffprobe_anomaly(file_item: dict, parsed: dict, batch_profile: dict | None, batch_sizes: list[int]) -> tuple[bool, str]:
     if _is_special_probe_candidate(str((file_item or {}).get("name", "") or "")):
         return True, "special_episode"
@@ -1378,7 +1416,29 @@ async def _run_organize_async(run_id: str, req):
             pending_tv_batches = {}
             ffprobe_batch_profiles: dict = {}
             ffprobe_batch_sizes: dict = {}
-            ffprobe_stats = {"sample": 0, "anomaly": 0, "cache": 0, "reuse": 0, "batch_cache": 0, "mismatch": 0, "full_probe": 0}
+            ffprobe_batch_segment_samples: dict = {}
+            ffprobe_stats = {"sample": 0, "anomaly": 0, "cache": 0, "reuse": 0, "batch_cache": 0, "mismatch": 0, "full_probe": 0, "segment": 0}
+
+            def _record_ffprobe_segment(ffprobe_batch_key: tuple, sampled_profile: dict, current_size: int, file_name: str, reason: str, from_cache: bool = False) -> None:
+                segment_state = ffprobe_batch_segment_samples.get(ffprobe_batch_key)
+                segment_state, segment_reset = _record_ffprobe_segment_sample(segment_state, sampled_profile, current_size)
+                ffprobe_batch_segment_samples[ffprobe_batch_key] = segment_state
+                if segment_reset:
+                    ffprobe_stats["mismatch"] += 1
+                    logger.debug(f"[MediaOrganize] FFPROBE分段样本重置: {file_name} | batch={ffprobe_batch_key}")
+                segment_profile = segment_state.get("profile") or {}
+                segment_sample_count = int(segment_profile.get("sample_count", 0) or 0)
+                if segment_sample_count >= _FFPROBE_BATCH_SAMPLE_LIMIT:
+                    ffprobe_batch_profiles[ffprobe_batch_key] = segment_profile
+                    ffprobe_batch_sizes[ffprobe_batch_key] = list(segment_state.get("sizes") or [])
+                    _set_cached_ffprobe_batch_profile(ffprobe_batch_key, segment_profile)
+                    ffprobe_batch_segment_samples.pop(ffprobe_batch_key, None)
+                    ffprobe_stats["segment"] += 1
+                    logger.debug(f"[MediaOrganize] FFPROBE分段样本切换: {file_name} | batch={ffprobe_batch_key} | 样本数={segment_sample_count}")
+                else:
+                    source_label = "缓存" if from_cache else "探测"
+                    logger.debug(f"[MediaOrganize] FFPROBE分段采样{source_label}: {file_name} | batch={ffprobe_batch_key} | 样本数={segment_sample_count}/{_FFPROBE_BATCH_SAMPLE_LIMIT} | 原因={reason}")
+
             ffprobe_group_urls: dict[str, str] = {}
             group_parse_mode = (config_data.get("organize_parse_mode") or "filename").lower()
             if group_parse_mode == "ffprobe_full":
@@ -1496,27 +1556,36 @@ async def _run_organize_async(run_id: str, req):
                         ffprobe_stats["full_probe"] += 1
                     elif use_smart_ffprobe_mode:
                         ffprobe_batch_key = _build_ffprobe_batch_key(tmdb_id, parsed, file_item, ext)
-                        ffprobe_batch_sizes.setdefault(ffprobe_batch_key, []).append(int(file_item.get("size", 0) or 0))
+                        current_size = int(file_item.get("size", 0) or 0)
+                        batch_sizes = ffprobe_batch_sizes.setdefault(ffprobe_batch_key, [])
+                        batch_profile = ffprobe_batch_profiles.get(ffprobe_batch_key)
+                        if batch_profile is None:
+                            disk_batch_profile = _get_cached_ffprobe_batch_profile(ffprobe_batch_key)
+                            if disk_batch_profile:
+                                ffprobe_batch_profiles[ffprobe_batch_key] = disk_batch_profile
+                                batch_profile = disk_batch_profile
+                                ffprobe_stats["batch_cache"] += 1
+                        is_segment_sampling = ffprobe_batch_key in ffprobe_batch_segment_samples
                         cached_probe = _get_cached_ffprobe_fields(file_item)
                         if cached_probe:
                             variables = _merge_probe_fields_into_variables(variables, cached_probe)
                             ffprobe_stats["cache"] += 1
+                            sampled_profile = _make_ffprobe_sample_profile(cached_probe, ext)
+                            if is_segment_sampling:
+                                _record_ffprobe_segment(ffprobe_batch_key, sampled_profile, current_size, file_name, "segment_sampling", from_cache=True)
+                            elif batch_profile:
+                                is_anomaly, anomaly_reason = _is_ffprobe_anomaly(file_item, parsed, batch_profile, batch_sizes)
+                                if _is_ffprobe_size_anomaly_reason(anomaly_reason):
+                                    ffprobe_stats["anomaly"] += 1
+                                    _record_ffprobe_segment(ffprobe_batch_key, sampled_profile, current_size, file_name, anomaly_reason, from_cache=True)
+                                elif not is_anomaly:
+                                    _append_ffprobe_batch_size(batch_sizes, current_size)
                         else:
-                            batch_profile = ffprobe_batch_profiles.get(ffprobe_batch_key)
-                            if batch_profile is None:
-                                disk_batch_profile = _get_cached_ffprobe_batch_profile(ffprobe_batch_key)
-                                if disk_batch_profile:
-                                    ffprobe_batch_profiles[ffprobe_batch_key] = disk_batch_profile
-                                    batch_profile = disk_batch_profile
-                                    ffprobe_stats["batch_cache"] += 1
-                            is_anomaly, anomaly_reason = _is_ffprobe_anomaly(
-                                file_item,
-                                parsed,
-                                batch_profile,
-                                ffprobe_batch_sizes.get(ffprobe_batch_key, []),
-                            )
-                            if batch_profile and not is_anomaly:
+                            is_anomaly, anomaly_reason = _is_ffprobe_anomaly(file_item, parsed, batch_profile, batch_sizes)
+                            should_probe = is_segment_sampling or not batch_profile or is_anomaly
+                            if batch_profile and not should_probe:
                                 variables = _merge_probe_fields_into_variables(variables, batch_profile)
+                                _append_ffprobe_batch_size(batch_sizes, current_size)
                                 ffprobe_stats["reuse"] += 1
                             else:
                                 pickcode = str((file_item or {}).get("pickcode", "") or "").strip()
@@ -1524,13 +1593,13 @@ async def _run_organize_async(run_id: str, req):
                                 probe_fields = await _probe_media_fields_via_ffprobe(file_item, drive_index, direct_url=direct_url)
                                 if probe_fields:
                                     variables = _merge_probe_fields_into_variables(variables, probe_fields)
-                                    sampled_profile = {
-                                        **probe_fields,
-                                        "ext": str(ext or "").lower(),
-                                        "sample_count": 1,
-                                    }
-                                    if batch_profile is None:
+                                    sampled_profile = _make_ffprobe_sample_profile(probe_fields, ext)
+                                    if is_segment_sampling:
+                                        ffprobe_stats["sample"] += 1
+                                        _record_ffprobe_segment(ffprobe_batch_key, sampled_profile, current_size, file_name, "segment_sampling")
+                                    elif batch_profile is None:
                                         ffprobe_batch_profiles[ffprobe_batch_key] = sampled_profile
+                                        _append_ffprobe_batch_size(batch_sizes, current_size)
                                         _set_cached_ffprobe_batch_profile(ffprobe_batch_key, sampled_profile)
                                         ffprobe_stats["sample"] += 1
                                         logger.debug(f"[MediaOrganize] FFPROBE样本探测: {file_name} | batch={ffprobe_batch_key}")
@@ -1543,6 +1612,7 @@ async def _run_organize_async(run_id: str, req):
                                                     "sample_count": sample_count + 1,
                                                 })
                                                 ffprobe_batch_profiles[ffprobe_batch_key] = merged_profile
+                                                _append_ffprobe_batch_size(batch_sizes, current_size)
                                                 _set_cached_ffprobe_batch_profile(ffprobe_batch_key, merged_profile)
                                                 ffprobe_stats["sample"] += 1
                                                 logger.debug(f"[MediaOrganize] FFPROBE补充样本: {file_name} | batch={ffprobe_batch_key} | 样本数={sample_count + 1}")
@@ -1550,11 +1620,15 @@ async def _run_organize_async(run_id: str, req):
                                                 ffprobe_stats["mismatch"] += 1
                                                 ffprobe_stats["anomaly"] += 1
                                                 logger.debug(f"[MediaOrganize] FFPROBE样本不一致: {file_name} | batch={ffprobe_batch_key}")
+                                        elif _is_ffprobe_size_anomaly_reason(anomaly_reason):
+                                            ffprobe_stats["anomaly"] += 1
+                                            _record_ffprobe_segment(ffprobe_batch_key, sampled_profile, current_size, file_name, anomaly_reason)
                                         else:
                                             ffprobe_stats["anomaly"] += 1
                                             logger.debug(f"[MediaOrganize] FFPROBE异常探测: {file_name} | 原因={anomaly_reason}")
-                                elif batch_profile and not is_anomaly:
+                                elif batch_profile and not is_anomaly and not is_segment_sampling:
                                     variables = _merge_probe_fields_into_variables(variables, batch_profile)
+                                    _append_ffprobe_batch_size(batch_sizes, current_size)
                                     ffprobe_stats["reuse"] += 1
 
                     # 二级分类：计算有效目标目录
@@ -1998,7 +2072,7 @@ async def _run_organize_async(run_id: str, req):
                     ))
 
             logger.debug(
-                f"[MediaOrganize] FFPROBE统计: 全量探测={ffprobe_stats['full_probe']} 样本={ffprobe_stats['sample']} 异常={ffprobe_stats['anomaly']} 文件缓存命中={ffprobe_stats['cache']} 批次缓存命中={ffprobe_stats['batch_cache']} 批次复用={ffprobe_stats['reuse']} 样本不一致={ffprobe_stats['mismatch']}"
+                f"[MediaOrganize] FFPROBE统计: 全量探测={ffprobe_stats['full_probe']} 样本={ffprobe_stats['sample']} 异常={ffprobe_stats['anomaly']} 文件缓存命中={ffprobe_stats['cache']} 批次缓存命中={ffprobe_stats['batch_cache']} 批次复用={ffprobe_stats['reuse']} 样本不一致={ffprobe_stats['mismatch']} 分段切换={ffprobe_stats['segment']}"
             )
 
             # 本组整理完：失败文件所在的顶层目录直接移到失败目录
