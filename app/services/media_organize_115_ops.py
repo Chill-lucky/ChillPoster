@@ -908,9 +908,24 @@ async def _match_and_move_subtitles_batch(client, subtitle_plans: list[dict], su
             await _apply_subtitle_move_results(parent_id, subs, succeeded_ids, subtitles_by_parent)
             continue
 
-        logger.warning(f"[MediaOrganize] 字幕批量处理失败，回退逐条处理: parent_id={parent_id}, err={batch_result.get('error', '')}")
+        rename_done = bool(batch_result.get("rename_done"))
+        move_done = bool(batch_result.get("move_done"))
+        logger.warning(
+            f"[MediaOrganize] 字幕批量处理失败，回退逐条处理: parent_id={parent_id}, "
+            f"rename_done={rename_done}, move_done={move_done}, err={batch_result.get('error', '')}"
+        )
         for op in unique_ops:
-            ok = await _rename_115_file(client, op, op["new_name"], target_cid=target_cid, target_path=target_path)
+            fallback_op = dict(op)
+            fallback_op["name"] = op["new_name"] if rename_done else op["old_name"]
+            fallback_name = "" if rename_done else op["new_name"]
+            fallback_target_cid = None if move_done else target_cid
+            ok = await _rename_115_file(
+                client,
+                fallback_op,
+                fallback_name,
+                target_cid=fallback_target_cid,
+                target_path=target_path,
+            )
             if not ok:
                 logger.warning(f"[MediaOrganize] 字幕移动失败: {op['old_name']!r}")
                 continue
