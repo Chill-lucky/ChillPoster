@@ -34,7 +34,7 @@ from app.services.strm_service import (
     DEFAULT_DATA_EXTS,
 )
 from app.services.media_organize_115_ops import (
-    _get_115_client, _get_115_fs, _list_115_tree_entries, _iter_115_media_entries, _iter_115_media_entries_from_tree,
+    _get_115_client, _get_115_fs, _list_115_tree_entries, _iter_115_media_entries_from_tree,
     _rename_115_file, _rename_115_files_batch, _match_and_move_subtitles, _move_top_dir_to_failed, _move_failed_files_batch,
     _move_matched_subtitles_to_target, _match_and_move_subtitles_batch, _ensure_115_dir_chain_cached,
     _collect_event_video_sha1s_for_cache, _mkdir_115_dir, _move_115_items, _run_115_write_request_sync,
@@ -904,29 +904,6 @@ def _await_on_main_loop(coro, main_loop: asyncio.AbstractEventLoop):
     return asyncio.run_coroutine_threadsafe(coro, main_loop).result()
 
 
-async def _reconcile_late_subtitles(client, subtitles_by_parent: dict, organized_targets_by_parent: dict):
-    compensated = 0
-    for parent_id, targets in list((organized_targets_by_parent or {}).items()):
-        if not subtitles_by_parent.get(parent_id):
-            continue
-        for target in targets:
-            file_item = target.get("file_item") or {}
-            renamed_file = str(target.get("renamed_file", "") or file_item.get("name", "") or "")
-            target_cid = str(target.get("target_cid", "") or "")
-            target_path = str(target.get("target_path", "") or "")
-            if not renamed_file or not target_cid or not target_path:
-                continue
-            moved = await _match_and_move_subtitles(
-                client,
-                file_item,
-                renamed_file,
-                subtitles_by_parent,
-                target_cid=target_cid,
-                target_path=target_path,
-            )
-            compensated += len(moved or [])
-    return compensated
-
 
 async def _scan_source_poll_snapshot(drive_index: int, source_cid: str) -> dict:
     loop = asyncio.get_event_loop()
@@ -960,6 +937,32 @@ def _source_scan_signature(snapshot: dict) -> str:
         is_dir = "1" if item.get("is_dir") else "0"
         hasher.update(f"{is_dir}:{item_id}:{parent_id}:{name}:{path}:{size}:{sha1}:{pickcode}\n".encode("utf-8", errors="ignore"))
     return hasher.hexdigest()
+
+
+async def _wait_source_tree_stable(drive_index: int, source_cid: str, label: str, stable_scans: int = 2, timeout_seconds: float = 90.0):
+    stable_scans = max(1, int(stable_scans or 1))
+    started_at = _time.monotonic()
+    last_signature = ""
+    unchanged_count = 0
+    while True:
+        if _time.monotonic() - started_at > timeout_seconds:
+            logger.warning(f"[MediaOrganize] 等待源目录稳定超时: {label}")
+            return
+        snapshot = await _scan_source_poll_snapshot(drive_index, source_cid)
+        signature = _source_scan_signature(snapshot)
+        entry_count = int(snapshot.get("entry_count", 0) or 0)
+        if last_signature and signature == last_signature:
+            unchanged_count += 1
+        else:
+            unchanged_count = 1
+            last_signature = signature
+        logger.debug(
+            f"[MediaOrganize] 等待源目录稳定: {label} 条目={entry_count} 签名={signature[:8]} 稳定={unchanged_count}/{stable_scans}"
+        )
+        if unchanged_count >= stable_scans:
+            logger.info(f"[MediaOrganize] 源目录已稳定: {label} 条目={entry_count}")
+            return
+        await asyncio.sleep(5)
 
 
 async def _trigger_auto_organize_and_wait(drive_index: int, source_tree_entries: Optional[list[dict]] = None) -> tuple[str, str]:
@@ -1156,7 +1159,6 @@ async def _run_organize_async(run_id: str, req):
     skipped_results = []
     success_count = 0
     strm_generated_count = 0
-    organized_targets_by_parent: dict[str, list[dict]] = {}
     metadata_executor = None
     pending_library_cache_items: dict[str, dict] = {}
     pending_strm_payloads: list[dict] = []
@@ -1164,7 +1166,7 @@ async def _run_organize_async(run_id: str, req):
     pending_refresh_payloads: list[dict] = []
     pending_duplicate_moves: list[dict] = []
     pending_wash_reject_moves: list[dict] = []
-    duplicate_batch_size = 200
+    duplicate_batch_size = 50000
 
     def _flush_pending_library_cache_updates():
         nonlocal pending_library_cache_items
@@ -1329,7 +1331,7 @@ async def _run_organize_async(run_id: str, req):
                 logger.info(f"[MediaOrganize] TMDb失败: key={key} 标题={first_parsed.get('title','')}")
             return key, result
 
-        logger.debug("[MediaOrganize] 阶段1/4: 流式扫描源目录并持续提交分组")
+        logger.debug("[MediaOrganize] 阶段1/4: 加载源目录快照并前置SHA1排重")
         _update_streaming_progress(
             run_id,
             scanned_video_count=0,
@@ -1340,7 +1342,7 @@ async def _run_organize_async(run_id: str, req):
             scan_complete=False,
         )
 
-        # === Phase 2+3 流水线：扫到闭合分组后立即整理，不等全量扫描结束 ===
+        # === Phase 2+3：SHA1 排重完成后按媒体分组整理 ===
         async def _search_and_organize(key, group):
             nonlocal success_count, strm_generated_count
             group_started_at = _time.time()
@@ -1759,14 +1761,6 @@ async def _run_organize_async(run_id: str, req):
                                 pending_emby_library_checks=pending_emby_library_checks,
                                 pending_refresh_payloads=pending_refresh_payloads,
                             )
-                            parent_id = str((vf or {}).get("parent_id", "") or "")
-                            if parent_id:
-                                organized_targets_by_parent.setdefault(parent_id, []).append({
-                                    "file_item": vf,
-                                    "renamed_file": result.get("renamed_file", "") or vf.get("name", ""),
-                                    "target_cid": str((result.get("metadata_context") or {}).get("target_cid", "") or ""),
-                                    "target_path": _join_remote_path(target_base, result.get("target_folder", "")),
-                                })
                         else:
                             group_failed.append(file_item)
                     else:
@@ -1962,15 +1956,6 @@ async def _run_organize_async(run_id: str, req):
                             pending_emby_library_checks=pending_emby_library_checks,
                             pending_refresh_payloads=pending_refresh_payloads,
                         )
-                        plan_vf = plan_item.get("vf") or {}
-                        parent_id = str(plan_vf.get("parent_id", "") or "")
-                        if parent_id:
-                            organized_targets_by_parent.setdefault(parent_id, []).append({
-                                "file_item": plan_vf,
-                                "renamed_file": result.get("renamed_file", "") or plan_vf.get("name", ""),
-                                "target_cid": str((result.get("metadata_context") or {}).get("season_cid", "") or ""),
-                                "target_path": _join_remote_path(plan_item.get("target_base", ""), result.get("target_folder", ""), result.get("season_dir", "")),
-                            })
                     else:
                         group_failed.append(plan_item.get("vf") or {})
 
@@ -2079,8 +2064,6 @@ async def _run_organize_async(run_id: str, req):
                     logger.error(f"[MediaOrganize] 分组整理协程异常: {type(gather_result).__name__}: {gather_result}", exc_info=gather_result)
 
         async def _yield_to_group_tasks(force_wait: bool = False):
-            if pending_duplicate_moves:
-                await _flush_pending_duplicate_moves()
             if not in_flight_group_tasks:
                 return
             _raise_if_organize_cancelled(run_id)
@@ -2093,59 +2076,41 @@ async def _run_organize_async(run_id: str, req):
             _drain_finished_group_tasks()
 
         async def _wait_group_tasks_until_complete_or_cancel():
-            while pending_duplicate_moves or in_flight_group_tasks:
-                if pending_duplicate_moves:
-                    await _flush_pending_duplicate_moves()
+            while in_flight_group_tasks:
                 _raise_if_organize_cancelled(run_id)
-                if not in_flight_group_tasks:
-                    break
                 done, _ = await asyncio.wait(in_flight_group_tasks, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
                 if not done:
                     continue
                 _drain_finished_group_tasks()
 
-        media_entries_iter = (
-            _iter_115_media_entries_from_tree(prefetched_source_tree_entries)
-            if has_prefetched_source_tree
-            else _iter_115_media_entries(client, str(source_cid))
-        )
-        for entry in media_entries_iter:
+        if not has_prefetched_source_tree:
+            logger.debug("[MediaOrganize] 加载源目录完整快照")
+            prefetched_source_tree_entries = await loop.run_in_executor(
+                None,
+                _list_115_tree_entries,
+                client,
+                str(source_cid),
+            )
+            logger.info(f"[MediaOrganize] 源目录快照加载完成: 条目={len(prefetched_source_tree_entries or [])}")
+
+        media_entries = list(_iter_115_media_entries_from_tree(prefetched_source_tree_entries))
+        video_items = []
+        for entry in media_entries:
             kind = entry.get("kind")
             item = entry.get("item") or {}
             if kind == "subtitle":
                 parent_id = str(item.get("parent_id", "") or "")
                 subtitles_by_parent.setdefault(parent_id, []).append(item)
-                if parent_id in organized_targets_by_parent:
-                    moved_count = await _reconcile_late_subtitles(
-                        client,
-                        subtitles_by_parent,
-                        {parent_id: organized_targets_by_parent.get(parent_id, [])},
-                    )
-                    if moved_count:
-                        logger.info(f"[MediaOrganize] 晚到字幕补偿完成: parent={parent_id} count={moved_count}")
-                continue
-            if kind != "video":
-                continue
+            elif kind == "video":
+                video_items.append(item)
 
+        subtitle_count = sum(len(items) for items in subtitles_by_parent.values())
+        logger.info(f"[MediaOrganize] 源目录快照索引完成: 视频 {len(video_items)} 个，字幕 {subtitle_count} 个")
+
+        normal_video_items = []
+        for vf in video_items:
             scanned_video_count += 1
-            vf = item
             file_name = vf.get("name", "")
-            ext = os.path.splitext(file_name)[1] or ".mkv"
-
-            name_lower = file_name.lower()
-            if any(kw in name_lower for kw in ("预告", "预告片", "trailer", "preview")):
-                results.append({"file": file_name, "status": "skipped", "message": "预告片，跳过"})
-                _update_streaming_progress(
-                    run_id,
-                    scanned_video_count=scanned_video_count,
-                    processed_result_count=len(results),
-                    success_count=success_count,
-                    error_count=_count_error_results(results),
-                    strm_generated_count=strm_generated_count,
-                    scan_complete=False,
-                )
-                continue
-
             file_sha1 = vf.get("sha1", "").upper()
             if file_sha1 and library_index.has_sha1(file_sha1):
                 logger.info(f"[MediaOrganize] SHA1已存在，跳过整理: {file_name}")
@@ -2180,6 +2145,42 @@ async def _run_organize_async(run_id: str, req):
                     strm_generated_count=strm_generated_count,
                     scan_complete=False,
                 )
+                _raise_if_organize_cancelled(run_id)
+                continue
+
+            normal_video_items.append(vf)
+            _update_streaming_progress(
+                run_id,
+                scanned_video_count=scanned_video_count,
+                processed_result_count=len(results),
+                success_count=success_count,
+                error_count=_count_error_results(results),
+                strm_generated_count=strm_generated_count,
+                scan_complete=False,
+            )
+            _raise_if_organize_cancelled(run_id)
+
+        if pending_duplicate_moves:
+            await _flush_pending_duplicate_moves()
+            _raise_if_organize_cancelled(run_id)
+
+        for vf in normal_video_items:
+            file_name = vf.get("name", "")
+            ext = os.path.splitext(file_name)[1] or ".mkv"
+
+            name_lower = file_name.lower()
+            if any(kw in name_lower for kw in ("预告", "预告片", "trailer", "preview")):
+                results.append({"file": file_name, "status": "skipped", "message": "预告片，跳过"})
+                _update_streaming_progress(
+                    run_id,
+                    scanned_video_count=scanned_video_count,
+                    processed_result_count=len(results),
+                    success_count=success_count,
+                    error_count=_count_error_results(results),
+                    strm_generated_count=strm_generated_count,
+                    scan_complete=False,
+                )
+                _raise_if_organize_cancelled(run_id)
                 continue
 
             file_path = vf.get("path", "")
@@ -2196,6 +2197,7 @@ async def _run_organize_async(run_id: str, req):
                     strm_generated_count=strm_generated_count,
                     scan_complete=False,
                 )
+                _raise_if_organize_cancelled(run_id)
                 continue
 
             logger.info(
@@ -2212,8 +2214,6 @@ async def _run_organize_async(run_id: str, req):
                 strm_generated_count=strm_generated_count,
                 scan_complete=False,
             )
-            if scanned_video_count % 50 == 0:
-                await _yield_to_group_tasks()
             _raise_if_organize_cancelled(run_id)
 
         if scanned_video_count == 0:
@@ -2221,11 +2221,9 @@ async def _run_organize_async(run_id: str, req):
                 await _cleanup_empty_source_dirs(client, str(source_cid))
             except Exception as e:
                 logger.warning(f"[MediaOrganize] 清理空文件夹失败: {e}")
+            await _wait_source_tree_stable(drive_index, str(source_cid), "无视频清理后")
             update_task_progress(run_id, "整理: 源目录没有视频文件", 100, "finished")
             return
-
-        if pending_duplicate_moves:
-            await _flush_pending_duplicate_moves()
 
         scan_complete = True
         total_files = scanned_video_count
@@ -2242,14 +2240,6 @@ async def _run_organize_async(run_id: str, req):
             await _flush_pending_wash_reject_moves()
             _raise_if_organize_cancelled(run_id)
 
-        compensated_count = await _reconcile_late_subtitles(
-            client,
-            subtitles_by_parent,
-            organized_targets_by_parent,
-        )
-        if compensated_count:
-            logger.info(f"[MediaOrganize] 扫描结束后完成晚到字幕补偿: {compensated_count} 个字幕")
-
         _flush_pending_library_cache_updates()
 
         _flush_pending_media_server_refreshes()
@@ -2262,12 +2252,32 @@ async def _run_organize_async(run_id: str, req):
             1 for r in results
             if r.get("status") == "skipped" and "SHA1 匹配" in str(r.get("message", ""))
         )
-        other_skipped_count = max(0, skipped_count - sha1_duplicate_skipped_count)
+        wash_rejected_skipped_count = sum(
+            1 for r in results
+            if r.get("status") == "skipped" and "洗版未通过" in str(r.get("message", ""))
+        )
+        same_batch_duplicate_skipped_count = sum(
+            1 for r in results
+            if r.get("status") == "skipped" and "同批次重复剧集" in str(r.get("message", ""))
+        )
+        trailer_skipped_count = sum(
+            1 for r in results
+            if r.get("status") == "skipped" and "预告片" in str(r.get("message", ""))
+        )
+        categorized_skipped_count = (
+            sha1_duplicate_skipped_count
+            + wash_rejected_skipped_count
+            + same_batch_duplicate_skipped_count
+            + trailer_skipped_count
+        )
+        other_skipped_count = max(0, skipped_count - categorized_skipped_count)
         failed_results = [r for r in results if r.get("status") == "error"]
         elapsed = _time.time() - _org_start
         logger.info(
             f"[MediaOrganize] 整理完成: 成功 {success_count}/{total_files} | 失败 {failed_count} | "
-            f"跳过 {skipped_count} (SHA1重复 {sha1_duplicate_skipped_count}, 其他 {other_skipped_count}) | "
+            f"跳过 {skipped_count} (SHA1重复 {sha1_duplicate_skipped_count}, "
+            f"洗版未通过 {wash_rejected_skipped_count}, 同批次洗版重复 {same_batch_duplicate_skipped_count}, "
+            f"预告片 {trailer_skipped_count}, 其他 {other_skipped_count}) | "
             f"新生成STRM {strm_generated_count} | 耗时 {elapsed:.1f}s"
         )
         if failed_results:
@@ -2283,6 +2293,8 @@ async def _run_organize_async(run_id: str, req):
             await _cleanup_empty_source_dirs(client, str(source_cid))
         except Exception as e:
             logger.warning(f"[MediaOrganize] 清理空文件夹失败: {e}")
+
+        await _wait_source_tree_stable(drive_index, str(source_cid), "整理结束清理后")
 
         source_dir = str(config_data.get("source_name", "") or "")
         target_dir = str(config_data.get("target_name", "") or "")
@@ -2301,6 +2313,9 @@ async def _run_organize_async(run_id: str, req):
             "failed": failed_count,
             "skipped": skipped_count,
             "sha1_duplicate_skipped": sha1_duplicate_skipped_count,
+            "wash_rejected_skipped": wash_rejected_skipped_count,
+            "same_batch_duplicate_skipped": same_batch_duplicate_skipped_count,
+            "trailer_skipped": trailer_skipped_count,
             "other_skipped": other_skipped_count,
             "strm": strm_generated_count,
         }

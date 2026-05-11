@@ -288,6 +288,8 @@ _DIRECT_URL_TIMEOUT_MAX_RETRIES = 1
 _WRITE_REQUEST_TIMEOUT_SECONDS = 20
 _WRITE_API_RATE_LIMIT_MAX_RETRIES = 3
 _WRITE_API_RATE_LIMIT_BASE_BACKOFF_SECONDS = 3.0
+_MOVE_PROGRESS_POLL_INTERVAL_SECONDS = 2.0
+_MOVE_PROGRESS_TIMEOUT_SECONDS = 1800.0
 _TREE_SCAN_MIN_INTERVAL_SECONDS = 5.0
 _TREE_SCAN_LOCK = threading.Lock()
 _LAST_TREE_SCAN_FINISHED_AT = 0.0
@@ -323,6 +325,79 @@ def _is_115_rate_limited_response(response: Any) -> bool:
 
 def _get_115_rate_limit_backoff_seconds(attempt: int) -> float:
     return _WRITE_API_RATE_LIMIT_BASE_BACKOFF_SECONDS * (2 ** attempt)
+
+
+def _extract_115_move_progress_id(response: Any) -> str:
+    if not isinstance(response, dict):
+        return ""
+    candidates = [response]
+    data = response.get("data")
+    if isinstance(data, dict):
+        candidates.append(data)
+    for payload in candidates:
+        for key in ("move_proid", "move_pro_id", "move_id", "pro_id", "proid", "task_id"):
+            value = payload.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def _is_115_move_progress_done(response: Any) -> bool:
+    if not isinstance(response, dict):
+        return False
+    if response.get("state") is False:
+        raise RuntimeError(f"移动进度查询失败: {response}")
+    data = response.get("data") if isinstance(response.get("data"), dict) else response
+    status_text = str(
+        data.get("status")
+        or data.get("state")
+        or data.get("status_text")
+        or data.get("message")
+        or data.get("status_msg")
+        or ""
+    ).lower().strip()
+    if status_text in {"1", "2", "done", "finish", "finished", "success", "complete", "completed"}:
+        return True
+    if any(token in status_text for token in ("完成", "成功")):
+        return True
+    for key in ("is_finish", "is_finished", "finished", "done", "complete", "completed", "success"):
+        value = data.get(key)
+        if value is True or str(value).strip() in {"1", "true", "yes"}:
+            return True
+    percent = data.get("percent") or data.get("progress") or data.get("rate")
+    try:
+        if percent is not None and float(str(percent).rstrip("%")) >= 100:
+            return True
+    except (TypeError, ValueError):
+        pass
+    total = data.get("total") or data.get("count") or data.get("all_count")
+    current = data.get("current") or data.get("processed") or data.get("done_count") or data.get("move_count")
+    try:
+        if total is not None and current is not None and int(current) >= int(total) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+async def _wait_115_move_progress(client, move_proid: str, label: str = "移动"):
+    move_proid = str(move_proid or "").strip()
+    if not move_proid:
+        return
+    started_at = time.monotonic()
+    logger.info(f"[MediaOrganize] 115移动任务已提交: {label} move_proid={move_proid}")
+    while True:
+        if time.monotonic() - started_at > _MOVE_PROGRESS_TIMEOUT_SECONDS:
+            raise TimeoutError(f"{label}移动任务等待超时: move_proid={move_proid}")
+        progress = await _run_115_write_request(
+            client,
+            "查询移动进度",
+            lambda write_client: write_client.fs_move_progress({"move_proid": move_proid}, async_=False),
+        )
+        if _is_115_move_progress_done(progress):
+            logger.info(f"[MediaOrganize] 115移动任务完成: {label} move_proid={move_proid}")
+            return
+        await asyncio.sleep(_MOVE_PROGRESS_POLL_INTERVAL_SECONDS)
 
 
 def run_115_write_request_sync(
@@ -446,7 +521,7 @@ _run_115_write_request = run_115_write_request
 
 async def _move_115_items(client, file_ids, target_cid: str):
     normalized_ids = file_ids if isinstance(file_ids, list) else int(file_ids)
-    return await _run_115_write_request(
+    response = await _run_115_write_request(
         client,
         "移动",
         lambda write_client: write_client.fs_move_app(
@@ -456,6 +531,11 @@ async def _move_115_items(client, file_ids, target_cid: str):
             async_=False,
         ),
     )
+    move_proid = _extract_115_move_progress_id(response)
+    if move_proid:
+        count = len(normalized_ids) if isinstance(normalized_ids, list) else 1
+        await _wait_115_move_progress(client, move_proid, label=f"移动{count}项到{target_cid}")
+    return response
 
 
 async def _rename_115_items(client, rename_pairs: list[tuple[int, str]]):
