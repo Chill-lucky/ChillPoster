@@ -171,22 +171,25 @@ def _run_docker_upgrade(run_id: str, cfg: dict):
 
     api = DockerAPI(timeout=cfg["timeout"])
     info = api.inspect_container(container_id)
-    current_image = str((info.get("Config") or {}).get("Image") or "")
     update_task_progress(run_id, "系统升级", 35, "running")
     _set_detail(run_id, step="pull", message=f"正在拉取镜像: {cfg['image']}")
     api.pull_image(cfg["image"])
 
     helper_name = f"chillposter-upgrade-{uuid.uuid4().hex[:8]}"
     socket_bind = "/var/run/docker.sock:/var/run/docker.sock"
+    helper_code = (
+        "import sys, time; "
+        "from app.services.self_upgrade_helper import replace_container; "
+        "time.sleep(2); "
+        "replace_container(sys.argv[1], sys.argv[2], skip_pull=True)"
+    )
     cmd = [
-        "python", "-m", "app.services.self_upgrade_helper",
-        "--container-id", container_id,
-        "--image", cfg["image"],
-        "--delay", "2",
-        "--skip-pull",
+        "python", "-c", helper_code,
+        container_id,
+        cfg["image"],
     ]
     payload = {
-        "Image": current_image or cfg["image"],
+        "Image": cfg["image"],
         "Cmd": cmd,
         "Env": ["PYTHONUNBUFFERED=1"],
         "HostConfig": {

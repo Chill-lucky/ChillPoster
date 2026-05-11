@@ -1,4 +1,21 @@
 {
+  "sub_classify": {
+    "movie": {
+      "enabled": true,
+      "levels": [
+        "year_decade"
+      ]
+    },
+    "tv": {
+      "enabled": true,
+      "levels": [
+        "year_decade"
+      ]
+    },
+    "sync_emby_library": true,
+    "emby_server_idx": 0,
+    "emby_library_level": "level3"
+  },
   "movie": [
     {
       "path": "特摄剧/特摄电影",

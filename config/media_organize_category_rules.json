@@ -14,7 +14,7 @@
     },
     "sync_emby_library": true,
     "emby_server_idx": 0,
-    "emby_library_level": "rule"
+    "emby_library_level": "level3"
   },
   "movie": [
     {

@@ -42,12 +42,12 @@ class MediaOrganizeConfig(BaseModel):
     failed_cid: str = '0'
     failed_name: str = '根目录'
     scrape_enabled: bool = True
-    emby_local_scrape: bool = False
+    emby_local_scrape: bool = True
     scrape_nfo: bool = True
     scrape_poster: bool = True
     scrape_fanart: bool = True
     scrape_logo: bool = True
-    scrape_banner: bool = False
+    scrape_banner: bool = True
     scrape_thumb: bool = True
     scrape_season_poster: bool = True
     scrape_episode_thumb: bool = True
@@ -59,10 +59,10 @@ class MediaOrganizeConfig(BaseModel):
     policy_thumb: str = 'missing_only'
     policy_season_poster: str = 'missing_only'
     policy_episode_thumb: str = 'missing_only'
-    life_monitor_enabled: bool = False
-    auto_sync_strm: bool = False
-    wash_enabled: bool = False
-    wash_by_equivalent_size: bool = False
+    life_monitor_enabled: bool = True
+    auto_sync_strm: bool = True
+    wash_enabled: bool = True
+    wash_by_equivalent_size: bool = True
     wash_tolerance_ratio: float = 0.0
     wash_reserved_1: bool = False
     wash_reserved_2: bool = False
@@ -94,6 +94,33 @@ class OrganizeRequest(BaseModel):
     _prefetched_source_tree_entries: Optional[list[dict]] = PrivateAttr(default=None)
 
 
+_DEFAULT_SCRAPE_FIELDS = {
+    "scrape_enabled": True,
+    "emby_local_scrape": True,
+    "scrape_nfo": True,
+    "scrape_poster": True,
+    "scrape_fanart": True,
+    "scrape_logo": True,
+    "scrape_banner": True,
+    "scrape_thumb": True,
+    "scrape_season_poster": True,
+    "scrape_episode_thumb": True,
+    "policy_nfo": "missing_only",
+    "policy_poster": "missing_only",
+    "policy_fanart": "missing_only",
+    "policy_logo": "missing_only",
+    "policy_banner": "missing_only",
+    "policy_thumb": "missing_only",
+    "policy_season_poster": "missing_only",
+    "policy_episode_thumb": "missing_only",
+}
+
+
+def _apply_default_scrape_fields(data: dict) -> dict:
+    data.update(_DEFAULT_SCRAPE_FIELDS)
+    return data
+
+
 class Browse115Payload(BaseModel):
     cid: str = '0'
     drive_index: int = 0
@@ -110,24 +137,24 @@ class CategoryRulesPayload(BaseModel):
 
 @router.get("/defaults")
 async def get_default_config():
-    return MediaOrganizeConfig().dict()
+    return _apply_default_scrape_fields(MediaOrganizeConfig().dict())
 
 
 @router.get("/get")
 async def get_config():
     """读取媒体整理配置"""
     if not os.path.exists(CONFIG_FILE):
-        return MediaOrganizeConfig().dict()
+        return _apply_default_scrape_fields(MediaOrganizeConfig().dict())
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
         if isinstance(data, dict):
             data["drive_index"] = 0
-            return data
-        return MediaOrganizeConfig().dict()
+            return _apply_default_scrape_fields(data)
+        return _apply_default_scrape_fields(MediaOrganizeConfig().dict())
     except Exception as e:
         logger.error(f"[MediaOrganize] 读取配置失败: {e}")
-        return MediaOrganizeConfig().dict()
+        return _apply_default_scrape_fields(MediaOrganizeConfig().dict())
 
 
 @router.post("/save")
@@ -148,6 +175,7 @@ async def save_config(config: MediaOrganizeConfig):
 
         merged_data = dict(old_data) if isinstance(old_data, dict) else {}
         merged_data.update(config.dict())
+        _apply_default_scrape_fields(merged_data)
 
         from app.routers.config_302 import get_config_302_sync
         cfg302 = get_config_302_sync()

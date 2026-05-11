@@ -47,9 +47,9 @@ def normalize_library_path(path: str | None) -> str:
 def _default_state() -> dict:
     return {
         "settings_snapshot": {
-            "sync_emby_library": False,
+            "sync_emby_library": True,
             "emby_server_idx": 0,
-            "emby_library_level": "level1",
+            "emby_library_level": "level3",
         },
         "desired_libraries": {},
         "local_paths": {},
@@ -101,9 +101,9 @@ def _cache_key(server_idx: int, media_type: str, level_key: str) -> tuple[int, s
 def _extract_settings_snapshot(sc: Optional[dict]) -> dict:
     sc = sc or {}
     return {
-        "sync_emby_library": bool(sc.get("sync_emby_library", False)),
+        "sync_emby_library": bool(sc.get("sync_emby_library", True)),
         "emby_server_idx": int(sc.get("emby_server_idx", 0) or 0),
-        "emby_library_level": sc.get("emby_library_level", "level1") or "level1",
+        "emby_library_level": sc.get("emby_library_level", "level3") or "level3",
     }
 
 

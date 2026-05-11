@@ -21,7 +21,7 @@ CONFIG_FILE = "config/strm_config.json"
 # ==========================================
 
 class StrmSyncTask(BaseModel):
-    name: str = '默认同步'
+    name: str = '标准媒体库同步'
     drive_index: int = 0
     remote_path: str = ''
     local_path: str = ''

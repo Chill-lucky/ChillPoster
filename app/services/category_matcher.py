@@ -5,6 +5,35 @@ from core.logger import logger
 
 RULES_FILE = "config/media_organize_category_rules.json"
 
+DEFAULT_SUB_CLASSIFY = {
+    "movie": {"enabled": True, "levels": ["year_decade"]},
+    "tv": {"enabled": True, "levels": ["year_decade"]},
+    "sync_emby_library": True,
+    "emby_server_idx": 0,
+    "emby_library_level": "level3",
+}
+
+
+def _apply_default_sub_classify(rules: dict) -> dict:
+    if not isinstance(rules, dict):
+        rules = {}
+    sub_classify = dict(DEFAULT_SUB_CLASSIFY)
+    existing = rules.get("sub_classify")
+    if isinstance(existing, dict):
+        sub_classify.update(existing)
+        for media_type in ("movie", "tv"):
+            media_defaults = DEFAULT_SUB_CLASSIFY[media_type]
+            media_existing = existing.get(media_type)
+            if isinstance(media_existing, dict):
+                media_data = dict(media_defaults)
+                media_data.update(media_existing)
+                sub_classify[media_type] = media_data
+    rules["sub_classify"] = sub_classify
+    rules.setdefault("movie", [])
+    rules.setdefault("tv", [])
+    return rules
+
+
 def _load_default_rules() -> dict:
     base = os.path.dirname(__file__)
     for path in [
@@ -13,11 +42,11 @@ def _load_default_rules() -> dict:
     ]:
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                return _apply_default_sub_classify(json.load(f))
         except Exception:
             continue
     logger.warning("[CategoryMatcher] 默认规则文件未找到，使用空规则")
-    return {"movie": [], "tv": []}
+    return _apply_default_sub_classify({"movie": [], "tv": []})
 
 DEFAULT_RULES: dict = _load_default_rules()
 
@@ -26,10 +55,10 @@ def load_rules() -> dict:
     if os.path.exists(RULES_FILE):
         try:
             with open(RULES_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                return _apply_default_sub_classify(json.load(f))
         except Exception as e:
             logger.warning(f"[CategoryMatcher] 读取规则文件失败，使用默认: {e}")
-    return DEFAULT_RULES
+    return _apply_default_sub_classify(DEFAULT_RULES)
 
 
 def save_rules(rules: dict):

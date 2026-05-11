@@ -1971,7 +1971,7 @@ createApp({
         // STRM 配置
         // ==========================================
         const defaultStrmTask = {
-            name: '',
+            name: '标准媒体库同步',
             drive_index: 0,
             remote_path: '',
             local_path: '',
@@ -2100,12 +2100,12 @@ createApp({
             movie_enabled: true,
             tv_enabled: true,
             scrape_enabled: true,
-            emby_local_scrape: false,
+            emby_local_scrape: true,
             scrape_nfo: true,
             scrape_poster: true,
             scrape_fanart: true,
             scrape_logo: true,
-            scrape_banner: false,
+            scrape_banner: true,
             scrape_thumb: true,
             scrape_season_poster: true,
             scrape_episode_thumb: true,
@@ -2118,10 +2118,10 @@ createApp({
             policy_season_poster: 'missing_only',
             policy_episode_thumb: 'missing_only',
             auto_detect_bluray: true,
-            life_monitor_enabled: false,
-            auto_sync_strm: false,
-            wash_enabled: false,
-            wash_by_equivalent_size: false,
+            life_monitor_enabled: true,
+            auto_sync_strm: true,
+            wash_enabled: true,
+            wash_by_equivalent_size: true,
             wash_tolerance_ratio: 0,
             wash_reserved_1: false,
             wash_reserved_2: false,
@@ -2188,11 +2188,11 @@ createApp({
         const categoryRulesEditor = reactive({ activeType: 'movie', movie: [], tv: [] });
         const categoryRulesSaving = ref(false);
         const subClassify = reactive({
-            movie: { enabled: false, levels: [] },
-            tv:    { enabled: false, levels: [] },
-            sync_emby_library: false,
+            movie: { enabled: true, levels: ['year_decade'] },
+            tv:    { enabled: true, levels: ['year_decade'] },
+            sync_emby_library: true,
             emby_server_idx: 0,
-            emby_library_level: 'level1',
+            emby_library_level: 'level3',
         });
         const subClassifyVars = [
             { key: 'year_decade', label: '年代' },
@@ -2230,12 +2230,12 @@ createApp({
                 categoryRulesEditor.tv = JSON.parse(JSON.stringify(res.data.tv || []));
                 const sc = res.data.sub_classify || {};
                 for (const t of ['movie', 'tv']) {
-                    subClassify[t].enabled = sc[t]?.enabled || false;
-                    subClassify[t].levels = JSON.parse(JSON.stringify(sc[t]?.levels || []));
+                    subClassify[t].enabled = sc[t]?.enabled ?? true;
+                    subClassify[t].levels = JSON.parse(JSON.stringify(sc[t]?.levels || ['year_decade']));
                 }
-                subClassify.sync_emby_library = sc.sync_emby_library || false;
+                subClassify.sync_emby_library = sc.sync_emby_library ?? true;
                 subClassify.emby_server_idx = 0;
-                subClassify.emby_library_level = sc.emby_library_level || 'level1';
+                subClassify.emby_library_level = sc.emby_library_level || 'level3';
             } catch (e) {
                 console.error('获取分类规则失败', e);
             }
@@ -2676,6 +2676,27 @@ createApp({
             mediaOrganizeConfig.organize_parse_mode = 'filename';
         };
 
+        const applyDefaultScrapeSettings = () => {
+            mediaOrganizeConfig.scrape_enabled = true;
+            mediaOrganizeConfig.emby_local_scrape = true;
+            mediaOrganizeConfig.scrape_nfo = true;
+            mediaOrganizeConfig.scrape_poster = true;
+            mediaOrganizeConfig.scrape_fanart = true;
+            mediaOrganizeConfig.scrape_logo = true;
+            mediaOrganizeConfig.scrape_banner = true;
+            mediaOrganizeConfig.scrape_thumb = true;
+            mediaOrganizeConfig.scrape_season_poster = true;
+            mediaOrganizeConfig.scrape_episode_thumb = true;
+            mediaOrganizeConfig.policy_nfo = 'missing_only';
+            mediaOrganizeConfig.policy_poster = 'missing_only';
+            mediaOrganizeConfig.policy_fanart = 'missing_only';
+            mediaOrganizeConfig.policy_logo = 'missing_only';
+            mediaOrganizeConfig.policy_banner = 'missing_only';
+            mediaOrganizeConfig.policy_thumb = 'missing_only';
+            mediaOrganizeConfig.policy_season_poster = 'missing_only';
+            mediaOrganizeConfig.policy_episode_thumb = 'missing_only';
+        };
+
         const fetchMediaOrganizeConfig = async () => {
             try {
                 const res = await axios.get('/api/media_organize/get');
@@ -2685,12 +2706,13 @@ createApp({
                 }
             } catch (e) { /* first load, use defaults */ }
             normalizeOrganizeParseMode();
-            mediaOrganizeConfig.scrape_enabled = !!mediaOrganizeConfig.emby_local_scrape;
+            applyDefaultScrapeSettings();
         };
 
         const saveMediaOrganizeConfig = async () => {
             try {
                 normalizeOrganizeParseMode();
+                applyDefaultScrapeSettings();
                 await axios.post('/api/media_organize/save', { ...mediaOrganizeConfig, drive_index: 0 });
                 showToast('媒体整理配置已保存', 'success');
             } catch (e) {
@@ -4173,6 +4195,9 @@ createApp({
             await fetch302Config();
             fetchStrmConfig();
             fetchMediaOrganizeConfig();
+            if (tab.value === 'media_organize_rules') {
+                await fetchCategoryRules();
+            }
             await restoreRunningOrganizeTask();
             fetchHdhiveConfig();
             startHdhiveEventStream();

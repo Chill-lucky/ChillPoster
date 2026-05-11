@@ -119,7 +119,13 @@ async def _load_config_data() -> dict:
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+            if isinstance(data, dict):
+                try:
+                    from app.routers.media_organize import _apply_default_scrape_fields
+                    return _apply_default_scrape_fields(data)
+                except Exception:
+                    return data
         except Exception:
             pass
     return {}
