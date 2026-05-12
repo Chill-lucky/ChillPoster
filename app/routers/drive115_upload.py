@@ -19,8 +19,8 @@ class UploadTaskPayload(BaseModel):
     target_name: str = ""
     target_path: str = ""
     watch_mode: str = "realtime"
-    include_existing_on_start: bool = False
-    delete_local_after_success: bool = False
+    include_existing_on_start: bool = True
+    delete_local_after_success: bool = True
     concurrency: int = 1
 
 

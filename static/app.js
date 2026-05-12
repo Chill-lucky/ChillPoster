@@ -3712,8 +3712,8 @@ createApp({
             target_name: '',
             target_path: '',
             watch_mode: 'realtime',
-            include_existing_on_start: false,
-            delete_local_after_success: false,
+            include_existing_on_start: true,
+            delete_local_after_success: true,
             concurrency: 1
         });
         const upload115Browser = reactive({
@@ -5872,8 +5872,8 @@ createApp({
             upload115Form.target_name = '';
             upload115Form.target_path = '';
             upload115Form.watch_mode = 'realtime';
-            upload115Form.include_existing_on_start = false;
-            upload115Form.delete_local_after_success = false;
+            upload115Form.include_existing_on_start = true;
+            upload115Form.delete_local_after_success = true;
             upload115Form.concurrency = 1;
             upload115Browser.visible = false;
             upload115LocalBrowser.visible = false;
@@ -5894,8 +5894,8 @@ createApp({
             upload115Form.target_name = task.target_name || '';
             upload115Form.target_path = task.target_path || '';
             upload115Form.watch_mode = 'realtime';
-            upload115Form.include_existing_on_start = !!task.include_existing_on_start;
-            upload115Form.delete_local_after_success = !!task.delete_local_after_success;
+            upload115Form.include_existing_on_start = true;
+            upload115Form.delete_local_after_success = true;
             upload115Form.concurrency = Number(task.concurrency || 1);
             showCreate115Upload.value = true;
         };

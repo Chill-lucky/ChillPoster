@@ -12,7 +12,7 @@ from typing import Any
 
 from p115client import P115Client
 
-from app.services.media_organize_115_ops import _check_and_move
+from app.services.media_organize_115_ops import _check_and_move, _ensure_115_dir_chain_cached
 from core.logger import logger
 
 
@@ -57,6 +57,7 @@ class Drive115UploadService:
         self._queued_count: dict[str, int] = {}
         self._active_count: dict[str, int] = {}
         self._active_jobs: dict[str, dict[str, Any]] = {}
+        self._dir_chain_cache: dict[tuple[str, str, str, str], str] = {}
 
     def start(self) -> None:
         with self._lock:
@@ -283,10 +284,19 @@ class Drive115UploadService:
         state.setdefault("tasks", {})
         self._state = state
         self._rebuild_known_keys_locked()
+        migrated_count = 0
         for task in self._tasks:
+            if not task.get("upload_defaults_v2_migrated"):
+                task["include_existing_on_start"] = True
+                task["delete_local_after_success"] = True
+                task["upload_defaults_v2_migrated"] = True
+                migrated_count += 1
             task_id = str(task.get("id") or "")
             if task_id:
                 self._ensure_task_state_locked(task_id)
+        if migrated_count:
+            self._save_tasks_locked()
+            logger.info(f"[Drive115Upload] 已迁移上传任务默认开关为开启: {migrated_count} 个")
         self._loaded = True
 
     def _read_json(self, path: Path, default: Any) -> Any:
@@ -331,8 +341,9 @@ class Drive115UploadService:
             "target_name": str(payload.get("target_name") or "").strip(),
             "target_path": str(payload.get("target_path") or "").strip(),
             "watch_mode": "realtime",
-            "include_existing_on_start": bool(payload.get("include_existing_on_start", False)),
-            "delete_local_after_success": bool(payload.get("delete_local_after_success", False)),
+            "include_existing_on_start": bool(payload.get("include_existing_on_start", True)),
+            "delete_local_after_success": bool(payload.get("delete_local_after_success", True)),
+            "upload_defaults_v2_migrated": True,
             "concurrency": concurrency,
         })
         return base
@@ -451,7 +462,11 @@ class Drive115UploadService:
             thread.start()
 
     def _watch_task_loop(self, task_id: str, stop_event: threading.Event) -> None:
-        logger.info(f"[Drive115Upload] 监听任务启动: {task_id}")
+        task = self._get_task_copy(task_id) or {}
+        logger.info(
+            f"[Drive115Upload] 监听任务启动: {task_id} | 本地={task.get('local_folder') or '-'} | "
+            f"115={task.get('target_path') or task.get('target_name') or task.get('target_cid') or '-'} | 递归扫描=开启"
+        )
         first_scan = True
         while not self._stop_event.is_set() and not stop_event.is_set():
             task = self._get_task_copy(task_id)
@@ -496,32 +511,39 @@ class Drive115UploadService:
 
     def _scan_task_files(self, task: dict[str, Any], force: bool) -> int:
         queued = 0
+        scanned = 0
         for path in self._iter_candidate_files(task):
+            scanned += 1
             info = self._get_stable_file_info(path)
             if not info:
                 continue
             if self._enqueue_file(task, path, info["size"], info["mtime_ns"], force=force, attempts=1, source="scan"):
                 queued += 1
+        if scanned or queued:
+            logger.info(f"[Drive115Upload] 扫描完成: {task.get('name') or task.get('id')} | 发现={scanned} | 入队={queued}")
         return queued
 
     def _iter_candidate_files(self, task: dict[str, Any]):
         folder = str(task.get("local_folder") or "")
         if not os.path.isdir(folder):
             return
-        with os.scandir(folder) as entries:
-            for entry in entries:
+        for root, dirs, files in os.walk(folder, topdown=True, followlinks=False):
+            dirs[:] = [name for name in dirs if self._is_candidate_name(name)]
+            for name in files:
+                if not self._is_candidate_name(name):
+                    continue
+                path = os.path.join(root, name)
                 try:
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                    name = entry.name
-                    if name.startswith("."):
-                        continue
-                    lower = name.lower()
-                    if lower in {"thumbs.db", ".ds_store"} or lower.endswith(TEMP_SUFFIXES):
-                        continue
-                    yield entry.path
+                    if os.path.isfile(path) and not os.path.islink(path):
+                        yield path
                 except OSError:
                     continue
+
+    def _is_candidate_name(self, name: str) -> bool:
+        if name.startswith("."):
+            return False
+        lower = name.lower()
+        return lower not in {"thumbs.db", ".ds_store"} and not lower.endswith(TEMP_SUFFIXES)
 
     def _get_stable_file_info(self, path: str) -> dict[str, Any] | None:
         try:
@@ -553,7 +575,11 @@ class Drive115UploadService:
         source: str = "watch",
     ) -> bool:
         task_id = str(task.get("id") or "")
-        key = self._make_key(task_id, path, size, mtime_ns)
+        local_folder = os.path.abspath(str(task.get("local_folder") or ""))
+        path_abs = os.path.abspath(path)
+        relative_path = self._relative_upload_path(local_folder, path_abs)
+        relative_dir = os.path.dirname(relative_path).replace(os.sep, "/").strip("/")
+        key = self._make_key(task_id, path_abs, size, mtime_ns)
         with self._lock:
             if key in self._queued_keys or key in self._active_keys or key in self._completed_keys:
                 return False
@@ -563,8 +589,11 @@ class Drive115UploadService:
                 "job_id": f"upload_{int(time.time())}_{uuid.uuid4().hex[:8]}",
                 "task_id": task_id,
                 "task_name": task.get("name", ""),
-                "path": path,
-                "filename": os.path.basename(path),
+                "path": path_abs,
+                "filename": os.path.basename(path_abs),
+                "local_folder": local_folder,
+                "relative_path": relative_path,
+                "relative_dir": relative_dir,
                 "size": int(size),
                 "mtime_ns": int(mtime_ns),
                 "key": key,
@@ -590,7 +619,14 @@ class Drive115UploadService:
             state = self._ensure_task_state_locked(task_id)
             state["queue_size"] = self._queued_count[task_id]
             state["message"] = "已加入上传队列"
+            logger.info(f"[Drive115Upload] 已加入上传队列: {relative_path} -> {task.get('target_path') or task.get('target_name') or task.get('target_cid')}")
             return True
+
+    def _relative_upload_path(self, local_folder: str, path: str) -> str:
+        rel_path = os.path.relpath(path, local_folder)
+        if rel_path == "." or rel_path.startswith(".." + os.sep) or rel_path == "..":
+            raise ValueError("文件不在监听目录内")
+        return rel_path.replace(os.sep, "/")
 
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -660,11 +696,16 @@ class Drive115UploadService:
         target_cid = str(job.get("target_cid") or "")
         if not os.path.isfile(path):
             raise FileNotFoundError("本地文件不存在")
+        stat = os.stat(path)
+        if int(stat.st_size) != int(job.get("size") or 0) or int(stat.st_mtime_ns) != int(job.get("mtime_ns") or 0):
+            raise RuntimeError("文件上传前发生变化，请等待下一轮稳定扫描")
         client = self.get_client(int(job.get("drive_index") or 0))
+        upload_cid = self._resolve_upload_target_cid(client, job)
+        job["upload_target_cid"] = str(upload_cid)
         self._update_active(job, "checking", 10, "正在尝试秒传")
         result = P115MultipartUpload.from_path(
             path,
-            pid=int(target_cid),
+            pid=int(upload_cid),
             filename=filename,
             user_id=client.user_id,
             user_key=client.user_key,
@@ -674,8 +715,9 @@ class Drive115UploadService:
             if result.get("state") is False:
                 raise RuntimeError(result.get("error") or result.get("message") or "秒传初始化失败")
             file_id = self._extract_file_id(result)
-            _check_and_move(client, file_id, target_cid, filename, reused=True)
+            _check_and_move(client, file_id, upload_cid, filename, reused=True)
             self._mark_success(job, method="rapid", message="秒传成功")
+            logger.info(f"[Drive115Upload] 秒传成功: {job.get('relative_path') or filename} -> cid={upload_cid}")
             return
 
         uploader = result
@@ -700,8 +742,26 @@ class Drive115UploadService:
                 error = "无响应"
             raise RuntimeError(error or "上传完成接口返回失败")
         file_id = self._extract_file_id(complete_result)
-        _check_and_move(client, file_id, target_cid, filename, reused=False)
+        _check_and_move(client, file_id, upload_cid, filename, reused=False)
         self._mark_success(job, method="multipart", message="真实上传成功")
+        logger.info(f"[Drive115Upload] 真实上传成功: {job.get('relative_path') or filename} -> cid={upload_cid}")
+
+    def _resolve_upload_target_cid(self, client, job: dict[str, Any]) -> str:
+        target_cid = str(job.get("target_cid") or "")
+        relative_dir = str(job.get("relative_dir") or "").strip("/")
+        if not relative_dir:
+            return target_cid
+        task_key = f"drive115_upload:{job.get('task_id') or ''}:{job.get('drive_index') or 0}:{target_cid}"
+        upload_cid = _ensure_115_dir_chain_cached(
+            client,
+            target_cid,
+            relative_dir,
+            self._dir_chain_cache,
+            task_key=task_key,
+            base_path=str(job.get("target_path") or "").strip("/"),
+        )
+        logger.info(f"[Drive115Upload] 远端目录已确认: {relative_dir} -> cid={upload_cid}")
+        return str(upload_cid)
 
     def _update_active(self, job: dict[str, Any], stage: str, progress: int | None, message: str, uploaded: int | None = None) -> None:
         job_id = str(job.get("job_id") or "")
@@ -719,11 +779,17 @@ class Drive115UploadService:
     def _mark_success(self, job: dict[str, Any], method: str, message: str) -> None:
         deleted_message = ""
         if job.get("delete_local_after_success"):
+            path = str(job.get("path") or "")
             try:
-                os.remove(str(job.get("path") or ""))
+                os.remove(path)
+                removed_dirs = self._cleanup_empty_parent_dirs(path, str(job.get("local_folder") or ""))
                 deleted_message = "，已删除本地文件"
+                if removed_dirs:
+                    deleted_message += f"并清理 {removed_dirs} 个空目录"
+                logger.info(f"[Drive115Upload] 已删除本地文件: {path}")
             except Exception as e:
                 deleted_message = f"，本地删除失败: {e}"
+                logger.warning(f"[Drive115Upload] 本地文件删除失败: {path}: {e}")
         record = self._history_record(job)
         record.update({
             "status": "success",
@@ -743,6 +809,20 @@ class Drive115UploadService:
                 self._completed_keys.add(key)
                 self._failed_keys.discard(key)
             self._save_state_locked()
+
+    def _cleanup_empty_parent_dirs(self, path: str, root: str) -> int:
+        root_abs = os.path.abspath(root)
+        current = os.path.abspath(os.path.dirname(path))
+        removed = 0
+        while current != root_abs and current.startswith(root_abs + os.sep):
+            try:
+                os.rmdir(current)
+                removed += 1
+                logger.info(f"[Drive115Upload] 已清理本地空目录: {current}")
+            except OSError:
+                break
+            current = os.path.dirname(current)
+        return removed
 
     def _mark_failed(self, job: dict[str, Any], error: str) -> None:
         record = self._history_record(job)
@@ -782,9 +862,12 @@ class Drive115UploadService:
             "task_id": str(job.get("task_id") or ""),
             "path": str(job.get("path") or ""),
             "filename": str(job.get("filename") or ""),
+            "relative_path": str(job.get("relative_path") or ""),
+            "relative_dir": str(job.get("relative_dir") or ""),
             "size": int(job.get("size") or 0),
             "key": str(job.get("key") or ""),
             "target_cid": str(job.get("target_cid") or ""),
+            "upload_target_cid": str(job.get("upload_target_cid") or job.get("target_cid") or ""),
             "target_name": str(job.get("target_name") or ""),
             "target_path": str(job.get("target_path") or ""),
             "attempts": int(job.get("attempts") or 1),

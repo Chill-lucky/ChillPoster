@@ -803,7 +803,7 @@
                                 <i class="fa-solid fa-circle-info"></i>
                                 <div class="info-content">
                                     <div class="info-alert-box-title">实时监听说明</div>
-                                    一个任务监听一个本地目录并上传到一个 115 目标目录；可以创建多个任务。新文件稳定后会先尝试秒传，秒传未命中再后台真实上传，失败会记录并可重试。
+                                    一个任务监听一个本地目录并递归上传到一个 115 目标目录；新文件稳定后会先尝试秒传，秒传未命中再后台真实上传。任务默认扫描已有文件，上传成功后删除本地文件并清理空目录。
                                 </div>
                             </div>
 
@@ -835,17 +835,7 @@
                                         </label>
                                         <span class="meta-row">启用实时监听</span>
                                         <div class="module-card-divider"></div>
-                                        <label class="ios-switch" title="启动时扫描已有文件">
-                                            <input type="checkbox" v-model="upload115Form.include_existing_on_start">
-                                            <span class="ios-slider"></span>
-                                        </label>
-                                        <span class="meta-row">启动时包含已有文件</span>
-                                        <div class="module-card-divider"></div>
-                                        <label class="ios-switch" title="成功后删除本地文件">
-                                            <input type="checkbox" v-model="upload115Form.delete_local_after_success">
-                                            <span class="ios-slider"></span>
-                                        </label>
-                                        <span class="meta-row">成功后删除本地文件</span>
+                                        <span class="meta-row">递归扫描已有文件，成功后删除本地文件</span>
                                     </div>
 
                                     <div class="cleanup-folder-section mt-20">
@@ -955,7 +945,7 @@
                                             <div class="upload115-section-title">正在处理</div>
                                             <div v-for="item in get115UploadTaskState(task.id).active" :key="item.job_id" class="upload115-job-row">
                                                 <div>
-                                                    <strong>{{ item.filename }}</strong>
+                                                    <strong>{{ item.relative_path || item.filename }}</strong>
                                                     <span>{{ get115UploadStageLabel(item.stage) }} · {{ item.message }}</span>
                                                 </div>
                                                 <div class="upload115-progress-wrap">
@@ -969,7 +959,7 @@
                                             <div class="upload115-section-title">失败记录</div>
                                             <div v-for="item in (get115UploadTaskState(task.id).failed || []).slice(0, 5)" :key="item.job_id" class="upload115-record-row upload115-record-row-failed">
                                                 <div>
-                                                    <strong>{{ item.filename }}</strong>
+                                                    <strong>{{ item.relative_path || item.filename }}</strong>
                                                     <span>{{ item.error || item.message }} · {{ format115UploadSize(item.size) }}</span>
                                                 </div>
                                                 <button class="btn btn-ghost btn-sm" @click="retry115UploadFile(task, item)">重试</button>
@@ -980,14 +970,14 @@
                                             <div class="upload115-section-title">最近成功</div>
                                             <div v-for="item in (get115UploadTaskState(task.id).recent || []).slice(0, 5)" :key="item.job_id" class="upload115-record-row">
                                                 <div>
-                                                    <strong>{{ item.filename }}</strong>
+                                                    <strong>{{ item.relative_path || item.filename }}</strong>
                                                     <span>{{ get115UploadMethodLabel(item.method) }} · {{ format115UploadSize(item.size) }} · {{ item.message }}</span>
                                                 </div>
                                             </div>
                                         </div>
                                     </div>
                                     <div class="mc-footer">
-                                        <span class="meta-row">已有文件：{{ task.include_existing_on_start ? '启动时扫描' : '默认忽略，手动扫描可入队' }}</span>
+                                        <span class="meta-row">递归扫描已有文件，成功后删除本地文件并清理空目录</span>
                                         <button class="btn btn-ghost btn-sm" @click="clear115UploadHistory(task)">清理记录</button>
                                     </div>
                                 </div>
