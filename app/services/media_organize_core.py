@@ -1107,34 +1107,22 @@ async def _run_source_poll_loop():
                         _state._source_poll_sessions.pop(session_key, None)
                     continue
 
-                snapshot = await _scan_source_poll_snapshot(drive_index, source_cid)
-                signature = _source_scan_signature(snapshot)
-                entry_count = int(snapshot.get("entry_count", 0) or 0)
-                source_tree_entries = list(snapshot.get("tree_entries", []) or [])
                 phase = str(current.get("phase", "pre_run") or "pre_run")
-                last_signature = str(current.get("last_scan_signature", "") or "")
-                unchanged_polls = int(current.get("unchanged_polls", 0) or 0)
 
                 if phase == "pre_run":
-                    if last_signature and signature == last_signature:
-                        unchanged_polls += 1
-                    else:
-                        unchanged_polls = 0
-                    current["last_scan_signature"] = signature
-                    current["unchanged_polls"] = unchanged_polls
-                    logger.info(
-                        f"[115Life] 源目录轮询: phase=pre_run key={session_key} 条目={entry_count} 签名={signature[:8]} 不变={unchanged_polls}"
-                    )
-                    if unchanged_polls >= 1:
-                        logger.info(f"[115Life] 源目录轮询命中稳定窗口，开始自动整理: key={session_key} reason=pre_run_tree_stable")
-                        run_id, run_status = await _trigger_auto_organize_and_wait(drive_index, source_tree_entries)
-                        current["active_run_id"] = run_id
-                        current["organize_runs"] = int(current.get("organize_runs", 0) or 0) + 1
-                        current["phase"] = "post_run"
-                        current["last_scan_signature"] = ""
-                        current["unchanged_polls"] = 0
-                        logger.debug(f"[115Life] 自动整理完成，等待整理后复查 | 会话={session_key} | run_id={run_id} | 状态={run_status}")
+                    logger.info(f"[115Life] 源目录事件触发自动整理: key={session_key} reason=pre_run_event")
+                    run_id, run_status = await _trigger_auto_organize_and_wait(drive_index)
+                    current["active_run_id"] = run_id
+                    current["organize_runs"] = int(current.get("organize_runs", 0) or 0) + 1
+                    current["phase"] = "post_run"
+                    current["last_scan_signature"] = ""
+                    current["unchanged_polls"] = 0
+                    logger.debug(f"[115Life] 自动整理完成，等待整理后复查 | 会话={session_key} | run_id={run_id} | 状态={run_status}")
                 else:
+                    snapshot = await _scan_source_poll_snapshot(drive_index, source_cid)
+                    signature = _source_scan_signature(snapshot)
+                    entry_count = int(snapshot.get("entry_count", 0) or 0)
+                    source_tree_entries = list(snapshot.get("tree_entries", []) or [])
                     logger.debug(
                         f"[115Life] 源目录复查: 整理完成后检查 | 会话={session_key} | 剩余条目={entry_count} | 签名={signature[:8]}"
                     )
