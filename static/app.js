@@ -6147,7 +6147,7 @@ createApp({
         const discoverData = reactive({});
         const discoverLoading = reactive({});
         const discoverErrors = reactive({});
-        const detailModal = reactive({ visible: false, item: null, detail: null, loading: false, subscribed: false, selectedSeason: null, castExpanded: false, seasonSubscribed: false, seasonEpisodes: {}, seasonEpisodesLoading: {}, librarySeriesStatus: { exists: false, seasons: {} } });
+        const detailModal = reactive({ visible: false, item: null, detail: null, loading: false, subscribed: false, selectedSeason: null, seasonExpanded: false, castExpanded: false, seasonSubscribed: false, seasonEpisodes: {}, seasonEpisodesLoading: {}, librarySeriesStatus: { exists: false, seasons: {} } });
         let detailHistoryActive = false;
         let suppressDetailPopstate = false;
         const gridModal = reactive({ visible: false, title: '', row: null, items: [], page: 1, totalPages: 1, loadingMore: false, noMore: false });
@@ -6751,6 +6751,7 @@ createApp({
             detailModal.detail = null;
             detailModal.selectedSeason = null;
             detailModal.seasonSubscribed = false;
+            detailModal.seasonExpanded = false;
             detailModal.castExpanded = false;
             detailModal.loading = false;
             detailModal.seasonEpisodes = {};
@@ -6825,19 +6826,27 @@ createApp({
             }
         };
 
-        const setDetailSeason = async (seasonNumber) => {
+        const setDetailSeason = async (seasonNumber, expand = true) => {
             if (seasonNumber == null || seasonNumber === '') {
                 detailModal.selectedSeason = null;
+                detailModal.seasonExpanded = false;
                 detailModal.seasonSubscribed = false;
                 return;
             }
             detailModal.selectedSeason = Number(seasonNumber);
-            loadSeasonEpisodes(detailModal.selectedSeason);
+            detailModal.seasonExpanded = !!expand;
+            if (detailModal.seasonExpanded) loadSeasonEpisodes(detailModal.selectedSeason);
             await refreshDetailSubscriptionState(detailModal.item, detailModal.selectedSeason);
         };
 
+        const toggleDetailSeasonExpanded = async (seasonNumber) => {
+            const nextSeason = Number(seasonNumber);
+            const expand = detailModal.selectedSeason !== nextSeason || !detailModal.seasonExpanded;
+            await setDetailSeason(nextSeason, expand);
+        };
+
         const toggleDetailSeasonSubscription = async (seasonNumber) => {
-            await setDetailSeason(seasonNumber);
+            await setDetailSeason(seasonNumber, detailModal.seasonExpanded);
             if (detailModal.seasonSubscribed) {
                 await unsubscribeMedia(detailModal.item);
             } else {
@@ -6855,6 +6864,7 @@ createApp({
             detailModal.loading = true;
             detailModal.subscribed = false;
             detailModal.selectedSeason = null;
+            detailModal.seasonExpanded = false;
             detailModal.castExpanded = false;
             detailModal.seasonSubscribed = false;
             try {
@@ -6895,7 +6905,7 @@ createApp({
 
                 const detailSeasons = getDetailSeasons(detail);
                 if (mediaType === 'tv' && detailSeasons.length) {
-                    await setDetailSeason(Number(detailSeasons[0].season_number));
+                    await setDetailSeason(Number(detailSeasons[0].season_number), true);
                 }
 
                 await refreshDetailSubscriptionState(item, detailModal.selectedSeason);
@@ -7333,7 +7343,7 @@ createApp({
 
             // [新增] 发现推荐页
             detailModal, openMediaDetail, closeDetailModal,
-            setDetailSeason, loadSeasonEpisodes, getSeasonLibraryState, isEpisodeInLibrary,
+            setDetailSeason, toggleDetailSeasonExpanded, loadSeasonEpisodes, getSeasonLibraryState, isEpisodeInLibrary,
             subscribeMedia, unsubscribeMedia, getImdbLink, getTvdbLink,
             gridModal, gridModalEl, gridSentinel, openRowGrid, closeGridModal,
             searchMovieResults, searchTvResults, discoverSearchLoading,

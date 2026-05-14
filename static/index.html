@@ -3661,7 +3661,7 @@
                                             </button>
                                         </div>
                                         <div class="detail-seasons-list detail-seasons-list-fullscreen">
-                                            <div v-for="s in detailModal.detail.seasons.filter(s => s.season_number > 0)" v-show="detailModal.selectedSeason === s.season_number" :key="s.season_number" class="detail-season-row detail-season-row-active">
+                                            <div v-for="s in detailModal.detail.seasons.filter(s => s.season_number > 0)" v-show="detailModal.selectedSeason === s.season_number" :key="s.season_number" class="detail-season-row detail-season-row-active" :class="{ expanded: detailModal.seasonExpanded }" @click="toggleDetailSeasonExpanded(s.season_number)">
                                                 <img v-if="s.poster_path" :src="'/api/discover/tmdb_img?path=' + s.poster_path" class="detail-season-poster detail-season-poster-lg" loading="lazy" />
                                                 <div class="detail-season-info">
                                                     <div class="detail-season-name">
@@ -3681,7 +3681,7 @@
                                             </div>
                                         </div>
 
-                                        <div v-if="detailModal.selectedSeason != null" class="detail-episodes-section">
+                                        <div v-if="detailModal.selectedSeason != null && detailModal.seasonExpanded" class="detail-episodes-section">
                                             <div v-if="detailModal.seasonEpisodesLoading[detailModal.selectedSeason]" class="detail-episodes-loading">
                                                 <i class="fa-solid fa-spinner fa-spin"></i> 加载集列表...
                                             </div>
