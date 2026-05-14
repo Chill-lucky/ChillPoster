@@ -19,7 +19,7 @@
     <script src="/static/vue.global.js"></script>
     <script src="/static/axios.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=20260512a">
+    <link rel="stylesheet" href="/static/style.css?v=20260515m">
 
 </head>
 
@@ -397,7 +397,7 @@
                                 </div>
                                 <div v-if="dashboardRecentItems.length === 0" class="dashboard-empty-state">暂无最近入库媒体</div>
                                 <div v-else class="recent-media-row">
-                                    <div v-for="item in dashboardRecentItems" :key="item.card_id || item.id" class="recent-media-item" @click="openDashboardItem(item)">
+                                    <div v-for="item in dashboardVisibleRecentItems" :key="item.card_id || item.id" class="recent-media-item" @click="openDashboardItem(item)">
                                         <div class="recent-media-poster">
                                             <img v-if="item.poster_url" :src="item.poster_url" :alt="item.title" loading="lazy">
                                         </div>
@@ -1310,7 +1310,7 @@
                         </div>
                     </div>
 
-                    <div v-else-if="tab === 'media_organize'" key="media_organize" class="scroll-view">
+                    <div v-else-if="tab === 'media_organize'" key="media_organize" class="scroll-view media-organize-page">
                         <div class="content-shell shell-xl">
 
                             <div class="server-toolbar mb-15">
@@ -2562,8 +2562,8 @@
                                 <h2><i class="fa-solid fa-bell icon-brand-bell"></i> 通知配置</h2>
                             </div>
 
-                            <!-- 通知渠道 2列并排 -->
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">
+                            <!-- 通知渠道 -->
+                            <div class="notification-channel-grid">
                             <!-- Telegram 配置 -->
                             <div class="card notification-card">
                                 <div class="card-header">
@@ -3997,165 +3997,86 @@
             </transition-group>
         </div>
 
-        <!-- 移动端底部导航栏 - 液态玻璃滑动版 -->
-        <nav class="liquid-nav-container">
-            <div class="liquid-nav-track" ref="navTrack">
-                <div class="liquid-nav-indicator" :style="indicatorStyle"></div>
-                <div class="mb-item" :class="{active: tab === 'dashboard'}" @click="selectMobileTab('dashboard')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-house mb-icon"></i>
+        <!-- 移动端主入口导航 + 更多菜单 -->
+        <transition name="mobile-more-backdrop">
+            <div v-if="mobileMenuVisible" class="mobile-more-backdrop" @click.self="toggleMobileMenu">
+                <div class="mobile-more-sheet">
+                    <div class="mobile-more-grabber"></div>
+                    <div class="mobile-more-head">
+                        <div>
+                            <div class="mobile-more-title">更多功能</div>
+                            <div class="mobile-more-sub">选择要打开的管理模块</div>
+                        </div>
+                        <button class="mobile-more-close" @click="toggleMobileMenu"><i class="fa-solid fa-xmark"></i></button>
                     </div>
-                    <span class="mb-label">首页</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'manual'}" @click="selectMobileTab('manual')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-pen-ruler mb-icon"></i>
+
+                    <div class="mobile-more-section">
+                        <div class="mobile-more-section-title">封面系统</div>
+                        <div class="mobile-more-grid">
+                            <button class="mobile-more-item" :class="{active: tab === 'manual'}" @click="selectMobileTab('manual')"><i class="fa-solid fa-pen-ruler"></i><span>手动</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'custom'}" @click="selectMobileTab('custom')"><i class="fa-solid fa-wand-magic-sparkles"></i><span>设计</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'auto'}" @click="selectMobileTab('auto')"><i class="fa-solid fa-robot"></i><span>自动</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'library_preview'}" @click="selectMobileTab('library_preview')"><i class="fa-solid fa-images"></i><span>备份</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'fonts'}" @click="selectMobileTab('fonts')"><i class="fa-solid fa-font"></i><span>字体</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'templates'}" @click="selectMobileTab('templates')"><i class="fa-solid fa-layer-group"></i><span>模板</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'translations'}" @click="selectMobileTab('translations')"><i class="fa-solid fa-language"></i><span>翻译</span></button>
+                        </div>
                     </div>
-                    <span class="mb-label">手动</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'custom'}" @click="selectMobileTab('custom')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-wand-magic-sparkles mb-icon"></i>
+
+                    <div class="mobile-more-section">
+                        <div class="mobile-more-section-title">网盘与自动化</div>
+                        <div class="mobile-more-grid">
+                            <button class="mobile-more-item" :class="{active: tab === 'rss'}" @click="selectMobileTab('rss')"><i class="fa-solid fa-rss"></i><span>RSS</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'webhook'}" @click="selectMobileTab('webhook')"><i class="fa-solid fa-bolt"></i><span>Webhook</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'resource_transfer'}" @click="selectMobileTab('resource_transfer')"><i class="fa-solid fa-cloud-arrow-down"></i><span>转存</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'media_organize_rules'}" @click="selectMobileTab('media_organize_rules')"><i class="fa-solid fa-sitemap"></i><span>分类</span></button>
+                        </div>
                     </div>
-                    <span class="mb-label">设计</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'auto'}" @click="selectMobileTab('auto')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-robot mb-icon"></i>
+
+                    <div class="mobile-more-section">
+                        <div class="mobile-more-section-title">配置</div>
+                        <div class="mobile-more-grid">
+                            <button class="mobile-more-item" :class="{active: tab === 'server'}" @click="selectMobileTab('server')"><i class="fa-solid fa-server"></i><span>服务器</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'config_115'}" @click="selectMobileTab('config_115')"><i class="fa-solid fa-cloud"></i><span>115</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'config_notification'}" @click="selectMobileTab('config_notification')"><i class="fa-solid fa-bell"></i><span>通知</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'config_yingchao'}" @click="selectMobileTab('config_yingchao')"><i class="fa-solid fa-film"></i><span>影巢</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'config_moviepilot'}" @click="selectMobileTab('config_moviepilot')"><i class="fa-solid fa-plane"></i><span>MP</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'config_proxy'}" @click="selectMobileTab('config_proxy')"><i class="fa-solid fa-globe"></i><span>代理</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'config_tmdb'}" @click="selectMobileTab('config_tmdb')"><i class="fa-solid fa-database"></i><span>TMDB</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'upgrade'}" @click="selectMobileTab('upgrade')"><i class="fa-solid fa-cloud-arrow-up"></i><span>升级</span></button>
+                            <button class="mobile-more-item" :class="{active: tab === 'account'}" @click="selectMobileTab('account')"><i class="fa-solid fa-user-gear"></i><span>账户</span></button>
+                            <button class="mobile-more-item mobile-more-item-danger" @click="logout"><i class="fa-solid fa-power-off"></i><span>退出</span></button>
+                        </div>
                     </div>
-                    <span class="mb-label">自动</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'rss'}" @click="selectMobileTab('rss')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-rss mb-icon"></i>
-                    </div>
-                    <span class="mb-label">RSS</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'webhook'}" @click="selectMobileTab('webhook')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-bolt mb-icon"></i>
-                    </div>
-                    <span class="mb-label">Webhook</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'library_preview'}" @click="selectMobileTab('library_preview')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-images mb-icon"></i>
-                    </div>
-                    <span class="mb-label">备份</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'media_subscribe'}" @click="selectMobileTab('media_subscribe')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-compass mb-icon"></i>
-                    </div>
-                    <span class="mb-label">发现</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'resource_transfer'}" @click="selectMobileTab('resource_transfer')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-cloud-arrow-down mb-icon"></i>
-                    </div>
-                    <span class="mb-label">转存</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'media_organize'}" @click="selectMobileTab('media_organize')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-folder-tree mb-icon"></i>
-                    </div>
-                    <span class="mb-label">整理</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'media_organize_rules'}" @click="selectMobileTab('media_organize_rules')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-sitemap mb-icon"></i>
-                    </div>
-                    <span class="mb-label">分类规则</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'strm_generate'}" @click="selectMobileTab('strm_generate')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-file-code mb-icon"></i>
-                    </div>
-                    <span class="mb-label">STRM</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'server'}" @click="selectMobileTab('server')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-server mb-icon"></i>
-                    </div>
-                    <span class="mb-label">服务器</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'config_115'}" @click="selectMobileTab('config_115')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-cloud mb-icon"></i>
-                    </div>
-                    <span class="mb-label">115</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'config_notification'}" @click="selectMobileTab('config_notification')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-bell mb-icon"></i>
-                    </div>
-                    <span class="mb-label">通知</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'config_yingchao'}" @click="selectMobileTab('config_yingchao')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-film mb-icon"></i>
-                    </div>
-                    <span class="mb-label">影巢</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'config_moviepilot'}" @click="selectMobileTab('config_moviepilot')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-plane mb-icon"></i>
-                    </div>
-                    <span class="mb-label">MP</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'config_proxy'}" @click="selectMobileTab('config_proxy')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-globe mb-icon"></i>
-                    </div>
-                    <span class="mb-label">代理</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'config_tmdb'}" @click="selectMobileTab('config_tmdb')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-database mb-icon"></i>
-                    </div>
-                    <span class="mb-label">TMDB</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'upgrade'}" @click="selectMobileTab('upgrade')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-cloud-arrow-up mb-icon"></i>
-                    </div>
-                    <span class="mb-label">升级</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'fonts'}" @click="selectMobileTab('fonts')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-font mb-icon"></i>
-                    </div>
-                    <span class="mb-label">字体</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'templates'}" @click="selectMobileTab('templates')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-layer-group mb-icon"></i>
-                    </div>
-                    <span class="mb-label">模板</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'translations'}" @click="selectMobileTab('translations')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-language mb-icon"></i>
-                    </div>
-                    <span class="mb-label">翻译</span>
-                </div>
-                <div class="mb-item" :class="{active: tab === 'account'}" @click="selectMobileTab('account')">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-user-gear mb-icon"></i>
-                    </div>
-                    <span class="mb-label">账户</span>
-                </div>
-                <div class="mb-item logout-item" @click="logout">
-                    <div class="mb-icon-wrapper">
-                        <i class="fa-solid fa-power-off mb-icon"></i>
-                    </div>
-                    <span class="mb-label">退出</span>
                 </div>
             </div>
+        </transition>
+
+        <nav class="mobile-tabbar-v2">
+            <button class="mobile-tabbar-item" :class="{active: tab === 'media_subscribe'}" @click="selectMobileTab('media_subscribe')">
+                <i class="fa-solid fa-compass"></i>
+                <span>发现</span>
+            </button>
+            <button class="mobile-tabbar-item" :class="{active: tab === 'media_organize'}" @click="selectMobileTab('media_organize')">
+                <i class="fa-solid fa-folder-tree"></i>
+                <span>整理</span>
+            </button>
+            <button class="mobile-tabbar-item mobile-tabbar-action" :class="{active: tab === 'dashboard'}" @click="selectMobileTab('dashboard')">
+                <i class="fa-solid fa-house"></i>
+                <span>首页</span>
+            </button>
+            <button class="mobile-tabbar-item" :class="{active: tab === 'strm_generate'}" @click="selectMobileTab('strm_generate')">
+                <i class="fa-solid fa-file-code"></i>
+                <span>STRM</span>
+            </button>
+            <button class="mobile-tabbar-item" :class="{active: mobileMenuVisible || !['dashboard', 'media_subscribe', 'media_organize', 'strm_generate'].includes(tab)}" @click="toggleMobileMenu">
+                <i class="fa-solid fa-ellipsis"></i>
+                <span>更多</span>
+            </button>
         </nav>
 
-        <!-- 移动端抽屉菜单 (已移除，使用滑动导航栏替代) -->
+        <!-- 移动端抽屉菜单 (已替换为主入口 + 更多菜单) -->
 
-    </div> <script src="/static/app.js?v=20260512c"></script>
+    </div> <script src="/static/app.js?v=20260515c"></script>
 </body>
 </html>

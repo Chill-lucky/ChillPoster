@@ -3989,53 +3989,12 @@ createApp({
         });
 
         const mobileMenuVisible = ref(false); // 控制"更多"菜单抽屉的显示
-        const navTrack = ref(null); // 导航栏轨道引用
-        const indicatorStyle = ref({ left: '0px', width: '0px' }); // 指示器样式
-
-        // 更新活动指示器位置
-        const updateIndicator = () => {
-            if (!navTrack.value) return;
-            const items = navTrack.value.querySelectorAll('.mb-item');
-            const activeIndex = Array.from(items).findIndex(item => item.classList.contains('active'));
-            if (activeIndex === -1) return;
-
-            const activeItem = items[activeIndex];
-
-            // 使用 offsetLeft 获取相对于轨道的位置（包含滚动偏移）
-            const itemLeft = activeItem.offsetLeft;
-            const itemWidth = activeItem.offsetWidth;
-            const indicatorWidth = 30;
-
-            // 计算指示器位置，使其居中对齐到活动项
-            const indicatorLeft = itemLeft + itemWidth / 2 - indicatorWidth / 2;
-
-            indicatorStyle.value = {
-                left: indicatorLeft + 'px',
-                width: indicatorWidth + 'px'
-            };
-
-            // 自动滚动到可见区域
-            const trackWidth = navTrack.value.offsetWidth;
-            const itemCenter = itemLeft + itemWidth / 2;
-            const scrollLeft = navTrack.value.scrollLeft;
-
-            if (itemCenter - scrollLeft > trackWidth * 0.8 || itemCenter - scrollLeft < trackWidth * 0.2) {
-                navTrack.value.scrollTo({
-                    left: itemCenter - trackWidth / 2,
-                    behavior: 'smooth'
-                });
-            }
-        };
 
         // 监听tab变化更新指示器
         watch(tab, (newTab) => {
             try {
                 localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, newTab);
             } catch (_) {}
-
-            nextTick(() => {
-                updateIndicator();
-            });
 
             if (tab.value === 'dashboard' && dashboardCovers.value.length > 0) {
                 splitIntoRows();
@@ -4053,49 +4012,8 @@ createApp({
             mobileMenuVisible.value = false;
         };
 
-        // 手势滑动检测
-        let touchStartX = 0;
-        let touchStartY = 0;
-        const handleTouchStart = (e) => {
-            touchStartX = e.touches[0].clientX;
-            touchStartY = e.touches[0].clientY;
-        };
-
-        const handleTouchEnd = (e) => {
-            const touchEndX = e.changedTouches[0].clientX;
-            const touchEndY = e.changedTouches[0].clientY;
-            const diffX = touchEndX - touchStartX;
-            const diffY = touchEndY - touchStartY;
-
-            // 只响应水平滑动，且滑动距离超过50px
-            if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 50) {
-                const tabs = ['dashboard', 'manual', 'custom', 'auto', 'rss', 'webhook',
-                             'media_subscribe', 'library_preview', 'server', 'config_115', 'fonts',
-                             'templates', 'translations', 'config_moviepilot', 'upgrade', 'account'];
-                const currentIndex = tabs.indexOf(tab.value);
-
-                if (diffX > 0 && currentIndex > 0) {
-                    // 向右滑动 - 上一个tab
-                    selectMobileTab(tabs[currentIndex - 1]);
-                } else if (diffX < 0 && currentIndex < tabs.length - 1) {
-                    // 向左滑动 - 下一个tab
-                    selectMobileTab(tabs[currentIndex + 1]);
-                }
-            }
-        };
-
-        // 添加触摸事件监听 + Dock 键盘/窗口事件
+        // 添加 Dock 键盘/窗口事件
         onMounted(() => {
-            const contentArea = document.querySelector('.content-area');
-            if (contentArea) {
-                contentArea.addEventListener('touchstart', handleTouchStart);
-                contentArea.addEventListener('touchend', handleTouchEnd);
-            }
-            // 初始化指示器位置
-            nextTick(() => {
-                updateIndicator();
-            });
-
             // Dock: 键盘快捷键 (Cmd+K / Ctrl+K)
             document.addEventListener('keydown', handleKeydown);
             // Dock: 窗口大小变化监听
@@ -4663,6 +4581,11 @@ createApp({
                 hasData: Array.isArray(history) && history.length > 0,
             };
         };
+
+        const dashboardVisibleRecentItems = computed(() => {
+            if (!isMobile.value) return dashboardRecentItems.value;
+            return dashboardRecentItems.value.slice(0, 100);
+        });
 
         const dashboardDeviceMetricCards = computed(() => {
             const cpuValueText = formatDevicePercent(dashboardDeviceMetrics.cpu.percent);
@@ -6638,11 +6561,16 @@ createApp({
                 if (attempt < 8) mainGridObserverRetryTimer = setTimeout(() => setupMainGridObserver(attempt + 1), 80);
                 return;
             }
+            const observerRoot = isMobile.value ? null : (mainGridScrollRoot.value || null);
             mainGridObserver = new IntersectionObserver((entries) => {
-                if (entries[0].isIntersecting && !mainGridLoading.value && !mainGridNoMore.value) {
-                    loadNextMainGridPage();
+                if (!entries[0].isIntersecting || mainGridLoading.value || mainGridNoMore.value) return;
+                if (isMobile.value) {
+                    const scroller = document.scrollingElement || document.documentElement;
+                    const remaining = scroller.scrollHeight - window.scrollY - window.innerHeight;
+                    if (remaining > 260) return;
                 }
-            }, { root: mainGridScrollRoot.value || null, rootMargin: '900px 0px', threshold: 0.01 });
+                loadNextMainGridPage();
+            }, { root: observerRoot, rootMargin: isMobile.value ? '80px 0px' : '900px 0px', threshold: 0.01 });
             mainGridObserver.observe(mainGridSentinel.value);
         };
 
@@ -7268,7 +7196,7 @@ createApp({
             currentSchema, accountForm, updateAccount, updatingAccount,
             transServerIdx, loadTransFromLib, editingTaskId, editTask, cancelEdit, runSavedTask,
             tasksState, toggleTaskLog, accordions, toggleAccordion, showCreateTask, clearLogs,
-            dashboardStats, dashboardRecentItems, dashboardRecentPlaybacks, dashboardMediaStats,
+            dashboardStats, dashboardRecentItems, dashboardVisibleRecentItems, dashboardRecentPlaybacks, dashboardMediaStats,
             dashboardDeviceMetrics, dashboardDeviceMetricsLoaded, dashboardDeviceMetricsPulse, dashboardDeviceMetricCards,
             dashboard115Account, dashboard115Loaded, handleDashboard115CardClick,
             dashboardCovers, wallRows, wallReady, dashboardOverviewLoading, initDashboard, fetchDashboardOverview, formatDashboardPlayedAt, getDeviceMetricState, formatDevicePercent, formatDeviceMemory, openDashboardLibrary, openDashboardItem, ensureDashboardServerId,
@@ -7332,7 +7260,6 @@ createApp({
             
             // 新增移动端变量
             mobileMenuVisible, toggleMobileMenu, selectMobileTab,
-            navTrack, indicatorStyle,
             editingRssTaskId, editRssTask, cancelRssEdit,
             
             // 新增开关控制方法
