@@ -6147,7 +6147,7 @@ createApp({
         const discoverData = reactive({});
         const discoverLoading = reactive({});
         const discoverErrors = reactive({});
-        const detailModal = reactive({ visible: false, item: null, detail: null, loading: false, subscribed: false, selectedSeason: null, castExpanded: false, seasonSubscribed: false });
+        const detailModal = reactive({ visible: false, item: null, detail: null, loading: false, subscribed: false, selectedSeason: null, castExpanded: false, seasonSubscribed: false, seasonEpisodes: {}, seasonEpisodesLoading: {}, librarySeriesStatus: { exists: false, seasons: {} } });
         let detailHistoryActive = false;
         let suppressDetailPopstate = false;
         const gridModal = reactive({ visible: false, title: '', row: null, items: [], page: 1, totalPages: 1, loadingMore: false, noMore: false });
@@ -6442,18 +6442,26 @@ createApp({
 
         const getItemExistenceKey = (item = {}) => {
             const tmdbId = getItemTmdbId(item);
-            if (!tmdbId) return '';
             const mediaType = item.media_type || 'movie';
-            return `${tmdbId}:${mediaType}`;
+            if (tmdbId) return `${tmdbId}:${mediaType}`;
+            const title = item.title || item.name || '';
+            const year = item.year || '';
+            if (!title) return '';
+            return `title:${mediaType}:${String(title).trim()}:${String(year).slice(0, 4)}`;
         };
 
         const markLibraryExists = async (items = []) => {
-            const candidates = (items || []).filter(item => getItemTmdbId(item));
+            const candidates = (items || []).filter(item => getItemExistenceKey(item));
             if (!candidates.length) return;
             try {
                 const payload = candidates.map(item => ({
                     tmdb_id: getItemTmdbId(item),
+                    title: item.title || item.name || '',
+                    year: item.year || '',
                     media_type: item.media_type || 'movie',
+                    source: item.source || '',
+                    id: item.id || '',
+                    _existence_key: getItemExistenceKey(item),
                 }));
                 const res = await axios.post('/api/discover/library/exists', payload);
                 const results = res.data?.results || {};
@@ -6659,6 +6667,23 @@ createApp({
             return (detail?.seasons || []).filter(season => season.season_number > 0);
         };
 
+        const getLibrarySeasonEpisodes = (seasonNumber) => {
+            return detailModal.librarySeriesStatus?.seasons?.[String(seasonNumber)] || [];
+        };
+
+        const isEpisodeInLibrary = (seasonNumber, episodeNumber) => {
+            return getLibrarySeasonEpisodes(seasonNumber).includes(Number(episodeNumber));
+        };
+
+        const getSeasonLibraryState = (season = {}) => {
+            const episodes = getLibrarySeasonEpisodes(season.season_number);
+            const total = Number(season.episode_count || 0);
+            const count = episodes.length;
+            if (!count) return { status: 'missing', label: '未入库', count, total };
+            if (total && count < total) return { status: 'partial', label: `部分入库 ${count}/${total}`, count, total };
+            return { status: 'exists', label: total ? `已入库 ${count}/${total}` : '已入库', count, total };
+        };
+
         const buildTmdbImageUrl = (path) => path ? `/api/discover/tmdb_img?path=${path}` : '';
 
         const normalizeDetailCardItem = (entry = {}, fallbackType = 'movie') => {
@@ -6728,6 +6753,9 @@ createApp({
             detailModal.seasonSubscribed = false;
             detailModal.castExpanded = false;
             detailModal.loading = false;
+            detailModal.seasonEpisodes = {};
+            detailModal.seasonEpisodesLoading = {};
+            detailModal.librarySeriesStatus = { exists: false, seasons: {} };
             detailHistoryActive = false;
         };
 
@@ -6770,6 +6798,33 @@ createApp({
             }
         };
 
+        const loadLibrarySeriesStatus = async (tmdbId) => {
+            if (!tmdbId) {
+                detailModal.librarySeriesStatus = { exists: false, seasons: {} };
+                return;
+            }
+            try {
+                const res = await axios.get(`/api/discover/library/series/${tmdbId}`);
+                detailModal.librarySeriesStatus = res.data || { exists: false, seasons: {} };
+            } catch (e) {
+                detailModal.librarySeriesStatus = { exists: false, seasons: {} };
+            }
+        };
+
+        const loadSeasonEpisodes = async (seasonNumber) => {
+            const tmdbId = detailModal.detail?.tmdb_id;
+            if (!tmdbId || detailModal.seasonEpisodes[seasonNumber] || detailModal.seasonEpisodesLoading[seasonNumber]) return;
+            detailModal.seasonEpisodesLoading[seasonNumber] = true;
+            try {
+                const res = await axios.get(`/api/discover/tv/${tmdbId}/season/${seasonNumber}`);
+                detailModal.seasonEpisodes[seasonNumber] = res.data?.episodes || [];
+            } catch (e) {
+                detailModal.seasonEpisodes[seasonNumber] = [];
+            } finally {
+                detailModal.seasonEpisodesLoading[seasonNumber] = false;
+            }
+        };
+
         const setDetailSeason = async (seasonNumber) => {
             if (seasonNumber == null || seasonNumber === '') {
                 detailModal.selectedSeason = null;
@@ -6777,6 +6832,7 @@ createApp({
                 return;
             }
             detailModal.selectedSeason = Number(seasonNumber);
+            loadSeasonEpisodes(detailModal.selectedSeason);
             await refreshDetailSubscriptionState(detailModal.item, detailModal.selectedSeason);
         };
 
@@ -6806,12 +6862,18 @@ createApp({
                 let tmdbId = item._tmdb_id || item.id;
 
                 if (item.source !== 'tmdb' && !item._tmdb_id) {
-                    const searchRes = await axios.get('/api/discover/search', {
-                        params: { query: item.title, type: mediaType, page: 1 }
-                    });
-                    const found = (searchRes.data?.items || [])[0];
-                    if (found) {
-                        tmdbId = found.id;
+                    const resolveKey = getItemExistenceKey(item) || `${item.source || 'source'}:${item.id || item.title || ''}`;
+                    const resolveRes = await axios.post('/api/discover/resolve_tmdb', [{
+                        _key: resolveKey,
+                        title: item.title || item.name || '',
+                        year: item.year || '',
+                        media_type: mediaType,
+                        source: item.source || '',
+                        id: item.id || '',
+                    }]);
+                    const resolvedId = resolveRes.data?.results?.[resolveKey];
+                    if (resolvedId) {
+                        tmdbId = resolvedId;
                     } else {
                         detailModal.detail = { ...item, overview: item.overview || '暂无简介' };
                         detailModal.loading = false;
@@ -6827,10 +6889,13 @@ createApp({
                 await markLibraryExists([item, ...detail.recommendation_items, ...detail.similar_items]);
                 detail.exists_in_library = !!item.exists_in_library;
                 detailModal.detail = detail;
+                if (mediaType === 'tv') {
+                    await loadLibrarySeriesStatus(tmdbId);
+                }
 
                 const detailSeasons = getDetailSeasons(detail);
                 if (mediaType === 'tv' && detailSeasons.length) {
-                    detailModal.selectedSeason = Number(detailSeasons[0].season_number);
+                    await setDetailSeason(Number(detailSeasons[0].season_number));
                 }
 
                 await refreshDetailSubscriptionState(item, detailModal.selectedSeason);
@@ -7268,6 +7333,7 @@ createApp({
 
             // [新增] 发现推荐页
             detailModal, openMediaDetail, closeDetailModal,
+            setDetailSeason, loadSeasonEpisodes, getSeasonLibraryState, isEpisodeInLibrary,
             subscribeMedia, unsubscribeMedia, getImdbLink, getTvdbLink,
             gridModal, gridModalEl, gridSentinel, openRowGrid, closeGridModal,
             searchMovieResults, searchTvResults, discoverSearchLoading,

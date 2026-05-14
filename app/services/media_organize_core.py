@@ -2326,6 +2326,11 @@ async def _run_organize_async(run_id: str, req):
         )
 
         update_task_progress(run_id, f"整理完成: {success_count}/{total_files} 成功", 100, "finished")
+        try:
+            from app.services.emby_library_cache import schedule_discover_index_refresh
+            schedule_discover_index_refresh(reason="media_organize:finished", delay_sec=90)
+        except Exception:
+            pass
         ACTIVE_TASKS[run_id]["detail"] = {
             "total": total_files,
             "success": success_count,

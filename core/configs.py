@@ -25,6 +25,7 @@ RSS_CONFIG_FILE = os.path.join(CONFIG_DIR, "rss_settings.json")
 WEBHOOK_CONFIG_FILE = os.path.join(CONFIG_DIR, "webhook.json")
 WECHAT_NOTIFY_CONFIG_FILE = os.path.join(CONFIG_DIR, "wechat_notify.json")
 MEDIA_LIBRARY_CACHE_FILE = os.path.join(CONFIG_DIR, "media_library_cache.json")
+EMBY_DISCOVER_INDEX_FILE = os.path.join(CONFIG_DIR, "emby_discover_index.json")
 DEVICE_ID_FILE = os.path.join(CONFIG_DIR, "device_id.txt")
 
 # 确保必要的目录存在

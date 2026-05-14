@@ -428,9 +428,9 @@ def get_season_details_tmdb(tv_id: int, season_number: int, api_key: str, append
 
     item_name_for_log = f"'{item_name}' " if item_name else ""
     if language and language != DEFAULT_LANGUAGE:
-        logger.debug(f"TMDb API: 获取电视剧 {item_name_for_log}(ID: {tv_id}) 第 {season_number} 季的详情 (语言: {language})...")
+        logger.trace(f"TMDb API: 获取电视剧 {item_name_for_log}(ID: {tv_id}) 第 {season_number} 季的详情 (语言: {language})...")
     else:
-        logger.debug(f"TMDb API: 获取电视剧 {item_name_for_log}(ID: {tv_id}) 第 {season_number} 季的详情...")
+        logger.trace(f"TMDb API: 获取电视剧 {item_name_for_log}(ID: {tv_id}) 第 {season_number} 季的详情...")
 
     return _tmdb_request(endpoint, api_key, params)
 
@@ -1005,7 +1005,7 @@ def discover_movie_tmdb(api_key: str, params: Dict[str, Any]) -> Optional[Dict[s
     if not api_key:
         return None
     endpoint = "/discover/movie"
-    logger.debug(f"TMDb: 发现电影 (条件: {params})")
+    logger.trace(f"TMDb: 发现电影 (条件: {params})")
     return _tmdb_request(endpoint, api_key, params, use_default_language=True)
 
 # --- 探索电视剧 ---
@@ -1014,7 +1014,7 @@ def discover_tv_tmdb(api_key: str, params: Dict[str, Any]) -> Optional[Dict[str,
     if not api_key:
         return None
     endpoint = "/discover/tv"
-    logger.debug(f"TMDb: 发现电视剧 (条件: {params})")
+    logger.trace(f"TMDb: 发现电视剧 (条件: {params})")
     return _tmdb_request(endpoint, api_key, params, use_default_language=True)
 
 def get_movie_genres_tmdb(api_key: str) -> Optional[List[Dict[str, Any]]]:

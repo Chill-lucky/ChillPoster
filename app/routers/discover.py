@@ -19,7 +19,7 @@ from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response, RedirectResponse, StreamingResponse
 
 from core.configs import global_config
-from core.media_library_cache import load_cache
+from app.services.emby_library_cache import discover_tmdb_id_exists, get_discover_series_status, lookup_discover_tmdb_id
 from core import tmdb
 from core.douban import DoubanApi
 
@@ -41,9 +41,7 @@ def _cache_get(key: str):
 def _cache_set(key: str, data, ttl: int = CACHE_TTL):
     _cache[key] = (data, time.time() + ttl)
 
-_LIBRARY_TMDB_MARKER_RE = re.compile(r"(?:tmdb(?:id)?[-=: ]*|tmdb-)(\d+)", re.IGNORECASE)
-_LIBRARY_TMDB_INDEX_TTL = 60
-_library_tmdb_index_cache: tuple[float, dict] | None = None
+_LIBRARY_TITLE_NOISE_RE = re.compile(r"(?i)(tmdb(?:id)?[-=: ]*\d+|tmdb-\d+|imdb[-=: ]*tt\d+|douban[-=: ]*\d+|S\d{1,2}E\d{1,3}|S\d{1,2}(?:\b|[^A-Za-z0-9])|Season\s*\d+|第\s*\d+\s*季|第\s*[一二三四五六七八九十百两0-9]+\s*季|[一二三四五六七八九十百两0-9]+\s*季|粤语|国语|普通话|闽南语|台语|英语|日语|韩语|泰语|原声|中字|字幕|配音|高清|超清|蓝光|\d{3,4}p|BluRay|WEB[-_. ]?DL|WEBRip|HDTV|REMUX|x264|x265|H\.?264|H\.?265|HEVC|AAC|DDP?\d?(?:\.\d)?|Atmos|NF|AMZN|BILI|TX|Tencent)")
 
 # ========== 工具函数 ==========
 
@@ -54,77 +52,74 @@ def _normalize_discover_media_type(value: Any) -> str:
     return "movie"
 
 
-def _extract_library_tmdb_ids(text: str) -> set[str]:
-    return {match.group(1) for match in _LIBRARY_TMDB_MARKER_RE.finditer(str(text or "")) if match.group(1)}
+def _normalize_library_title(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = _LIBRARY_TITLE_NOISE_RE.sub(" ", text)
+    text = re.sub(r"[\[【(（]\s*(?:粤语|国语|普通话|闽南语|台语|英语|日语|韩语|泰语|原声|中字|字幕|配音|高清|超清|蓝光)\s*[\]】)）]", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\[[^\]]*\]|【[^】]*】|\([^)]*\)|（[^）]*）", " ", text)
+    text = re.sub(r"[._\-+/\\:：·,，。!！?？'\"“”‘’~]+", " ", text)
+    text = re.sub(r"\s+", "", text).lower()
+    return text
 
 
-def _infer_library_item_media_type(item: dict, task_key: str, items: dict) -> str:
-    path = str(item.get("path", "") or "")
-    name = str(item.get("name", "") or "")
-    if re.search(r"(?:^|/)(电影|影片|Movie|Movies)(?:/|$)", path, re.IGNORECASE):
-        return "movie"
-    if re.search(r"(?:^|/)(Season\s*\d+|S\d{1,2})(?:/|$)", path, re.IGNORECASE):
-        return "tv"
-    if re.search(r"(?:^|/)(剧集|电视剧|番剧|动漫|动画|综艺|纪录片|电视)(?:/|$)", path):
-        return "tv"
-
-    try:
-        parent_id = int(item.get("parent_id", 0) or 0)
-    except (TypeError, ValueError):
-        parent_id = 0
-    if parent_id:
-        parent = items.get(str(parent_id)) or items.get(parent_id)
-        if isinstance(parent, dict):
-            parent_text = f"{parent.get('path', '')}/{parent.get('name', '')}"
-            if re.search(r"Season\s*\d+|S\d{1,2}", parent_text, re.IGNORECASE):
-                return "tv"
-
-    task_path = str(task_key or "").split(":", 1)[-1]
-    combined = f"{task_path}/{path}/{name}"
-    if re.search(r"(?:^|/)(剧集|电视剧|番剧|动漫|动画|综艺|纪录片|电视)(?:/|$)", combined):
-        return "tv"
-    return "movie"
+def _chinese_number_to_int(value: str) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    digit_map = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if text == "十":
+        return 10
+    if "十" in text:
+        left, _, right = text.partition("十")
+        tens = digit_map.get(left, 1) if left else 1
+        ones = digit_map.get(right, 0) if right else 0
+        return tens * 10 + ones
+    return digit_map.get(text)
 
 
-def _get_library_tmdb_index() -> dict:
-    global _library_tmdb_index_cache
-    now = time.time()
-    if _library_tmdb_index_cache and now - _library_tmdb_index_cache[0] < _LIBRARY_TMDB_INDEX_TTL:
-        return _library_tmdb_index_cache[1]
+def _extract_season_from_title(value: Any) -> tuple[str, int | None]:
+    text = str(value or "").strip()
+    if not text:
+        return "", None
+    patterns = (
+        r"(?:第\s*)?([一二三四五六七八九十两0-9]+)\s*季",
+        r"(?i)Season\s*(\d{1,2})",
+        r"(?i)(?:^|[\s._\-\[(（])S(\d{1,2})(?:$|[\s._\-\])）])",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        season = _chinese_number_to_int(match.group(1))
+        title = (text[:match.start()] + " " + text[match.end():]).strip()
+        return title, season
+    return text, None
 
-    index = {"movie": set(), "tv": set()}
-    cache = load_cache()
-    for task_key, task in (cache.get("tasks") or {}).items():
-        items = task.get("items") or {}
-        for item in items.values():
-            if not isinstance(item, dict):
-                continue
-            tmdb_ids = _extract_library_tmdb_ids(f"{item.get('path', '')} {item.get('name', '')}")
-            if not tmdb_ids:
-                continue
-            media_type = _infer_library_item_media_type(item, str(task_key), items)
-            index.setdefault(media_type, set()).update(tmdb_ids)
 
-    _library_tmdb_index_cache = (now, index)
-    return index
+def _item_exists_in_discover_index(item: dict) -> bool:
+    media_type = _normalize_discover_media_type(item.get("media_type"))
+    tmdb_id = item.get("_tmdb_id") or item.get("tmdb_id")
+    if not tmdb_id and item.get("source") in {"tmdb", "themoviedb"}:
+        tmdb_id = item.get("id")
+    if discover_tmdb_id_exists(tmdb_id, media_type):
+        return True
+    raw_title = item.get("title") or item.get("name") or ""
+    title, _ = _extract_season_from_title(raw_title)
+    title = title or raw_title
+    year = str(item.get("year") or "")[:4]
+    return bool(lookup_discover_tmdb_id(title, year, media_type))
 
 
 def _mark_library_exists_on_items(items: list[dict]):
     if not items:
         return
-    index = _get_library_tmdb_index()
     for item in items:
-        if not isinstance(item, dict):
-            continue
-        tmdb_id = item.get("_tmdb_id") or item.get("tmdb_id")
-        if not tmdb_id and item.get("source") in {"tmdb", "themoviedb"}:
-            tmdb_id = item.get("id")
-        if not tmdb_id:
-            item["exists_in_library"] = False
-            continue
-        tmdb_id = str(tmdb_id)
-        media_type = _normalize_discover_media_type(item.get("media_type"))
-        item["exists_in_library"] = tmdb_id in index.get(media_type, set())
+        if isinstance(item, dict):
+            item["exists_in_library"] = _item_exists_in_discover_index(item)
 
 
 # 内置 TMDB API Key（MoviePilot 同款默认 key，用户可在设置中覆盖）
@@ -1514,6 +1509,11 @@ async def media_detail(tmdb_id: int, type: str = Query("movie")):
     _cache_set(cache_key, detail, ttl=3600)
     return detail
 
+@router.get("/library/series/{tmdb_id}")
+def library_series_status(tmdb_id: int):
+    return get_discover_series_status(tmdb_id)
+
+
 @router.get("/tv/{tmdb_id}/season/{season_num}")
 async def season_detail(tmdb_id: int, season_num: int):
     api_key = _get_tmdb_key()
@@ -1549,24 +1549,26 @@ def search_media(query: str = Query(..., min_length=1), type: str = Query("movie
 @router.post("/library/exists")
 def check_library_exists(items: list[dict]):
     results = {}
-    index = _get_library_tmdb_index()
     for item in items or []:
         if not isinstance(item, dict):
             continue
-        tmdb_id = str(item.get("tmdb_id") or item.get("_tmdb_id") or item.get("id") or "").strip()
-        if not tmdb_id:
-            continue
         media_type = _normalize_discover_media_type(item.get("media_type"))
-        exists = tmdb_id in index.get(media_type, set())
-        results[f"{tmdb_id}:{media_type}"] = exists
+        key = item.get("_existence_key")
+        tmdb_id = str(item.get("tmdb_id") or item.get("_tmdb_id") or "").strip()
+        if not tmdb_id and item.get("source") in {"tmdb", "themoviedb"}:
+            tmdb_id = str(item.get("id") or "").strip()
+        if not key:
+            key = f"{tmdb_id}:{media_type}" if tmdb_id else ""
+        if key:
+            results[key] = _item_exists_in_discover_index(item)
     return {"results": results}
 
-# ========== 豆瓣→TMDB 批量解析 ==========
+# ========== 外部来源→TMDB 批量解析 ==========
 
 @router.post("/resolve_tmdb")
 async def resolve_douban_to_tmdb(items: list[dict]):
     """
-    批量将豆瓣条目解析为 TMDB ID。
+    批量将外部来源条目解析为 TMDB ID。
     输入: [{"title": "xxx", "year": "2024", "media_type": "movie"}, ...]
     返回: {"results": {"xxx_2024": 12345, ...}}
     """
@@ -1576,41 +1578,72 @@ async def resolve_douban_to_tmdb(items: list[dict]):
         return {"results": {}}
 
     async def _resolve_one(item):
-        title = item.get("title", "")
-        year = item.get("year", "")
-        media_type = item.get("media_type", "movie")
+        raw_title = item.get("title", "") or item.get("name", "")
+        title, season_num = _extract_season_from_title(raw_title)
+        title = title or raw_title
+        for prefix in ("电视剧", "电影", "纪录片", "综艺节目", "综艺"):
+            if title.startswith(prefix):
+                title = title[len(prefix):].strip()
+                break
+        normalized_search_title = _normalize_library_title(title)
+        if normalized_search_title:
+            title = normalized_search_title
+        year = str(item.get("year", "") or "")[:4]
+        media_type = _normalize_discover_media_type(item.get("media_type", "movie"))
         if not title:
             return None, None, None
+        emby_tmdb_id = lookup_discover_tmdb_id(title, year, media_type)
+        if emby_tmdb_id:
+            return item.get("_key"), int(emby_tmdb_id), None
         loop = asyncio.get_event_loop()
-        params = {"query": title}
-        if year and year.isdigit():
-            params["year"] = year if media_type == "movie" else year
         data = await loop.run_in_executor(
             None,
             lambda: tmdb.search_media_for_discover(title, api_key, item_type=media_type, page=1)
         )
-        if data and data.get("results"):
-            results = data["results"]
-            # 年份校验：优先匹配年份差 ≤1 的候选
-            year_str = item.get("year", "")
-            if year_str and year_str.isdigit():
-                year_val = int(year_str)
-                date_key = "release_date" if media_type == "movie" else "first_air_date"
+        if not data or not data.get("results"):
+            return item.get("_key"), None, None
+        results = data["results"]
+        if year and year.isdigit():
+            year_val = int(year)
+            if media_type == "movie":
                 for cand in results:
-                    cand_date = cand.get(date_key, "")
+                    cand_date = cand.get("release_date", "")
                     if cand_date and len(cand_date) >= 4:
                         try:
-                            cand_year = int(cand_date[:4])
-                            if abs(cand_year - year_val) <= 1:
+                            if int(cand_date[:4]) == year_val:
                                 return item.get("_key"), cand.get("id"), cand.get("vote_average")
                         except ValueError:
                             pass
-                # 年份都不匹配，跳过该条目
                 return item.get("_key"), None, None
-            # 无年份信息，降级接受第一个
-            first = results[0]
-            return item.get("_key"), first.get("id"), first.get("vote_average")
-        return item.get("_key"), None, None
+            else:
+                if season_num:
+                    for cand in results[:3]:
+                        cand_id = cand.get("id")
+                        if not cand_id:
+                            continue
+                        season_data = await loop.run_in_executor(
+                            None,
+                            lambda sid=cand_id: tmdb.get_season_details_tmdb(sid, season_num, api_key, append_to_response=None)
+                        )
+                        if season_data:
+                            season_date = season_data.get("air_date", "")
+                            if season_date and len(season_date) >= 4:
+                                try:
+                                    if int(season_date[:4]) == year_val:
+                                        return item.get("_key"), cand_id, cand.get("vote_average")
+                                except ValueError:
+                                    pass
+                    return item.get("_key"), None, None
+                for cand in results:
+                    cand_date = cand.get("first_air_date", "")
+                    if cand_date and len(cand_date) >= 4:
+                        try:
+                            if int(cand_date[:4]) == year_val:
+                                return item.get("_key"), cand.get("id"), cand.get("vote_average")
+                        except ValueError:
+                            pass
+                return item.get("_key"), None, None
+        return item.get("_key"), results[0].get("id"), results[0].get("vote_average")
 
     tasks = [_resolve_one(item) for item in items[:30]]
     results_list = await asyncio.gather(*tasks, return_exceptions=True)

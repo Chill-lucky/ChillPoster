@@ -8,6 +8,7 @@ import threading
 import time
 from typing import Optional
 
+from core.configs import EMBY_DISCOVER_INDEX_FILE
 from core.emby_client import EmbyClient
 from app.routers.config_302 import get_emby_config_by_index_sync
 
@@ -22,6 +23,22 @@ _lock = threading.RLock()
 _enabled = False
 _server_idx = 0
 _level = "level1"
+
+# Emby 可用性索引：整部媒体、标题映射、剧集季/集状态
+DISCOVER_INDEX_VERSION = 1
+DISCOVER_INDEX_TTL_SECONDS = 24 * 60 * 60
+DISCOVER_INDEX_MIN_REFRESH_INTERVAL = 5 * 60
+_discover_index: dict[str, str] = {}
+_discover_series_index: dict[str, dict[int, set[int]]] = {}
+_discover_items: dict[str, dict] = {}
+_discover_index_meta: dict = {}
+_discover_index_lock = threading.RLock()
+_discover_index_built = False
+_discover_index_building = False
+_discover_index_refresh_pending = False
+_discover_index_timer: threading.Timer | None = None
+_discover_index_last_finished_at = 0.0
+_discover_index_pending_reason = ""
 
 
 def _now_ts() -> int:
@@ -65,6 +82,14 @@ def _read_json_file(path: str, default):
         return default
 
 
+def _atomic_write_json(path: str, data) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
 def load_state() -> dict:
     state = _read_json_file(STATE_FILE, _default_state())
     if not isinstance(state, dict):
@@ -85,9 +110,7 @@ def load_state() -> dict:
 
 
 def save_state(state: dict):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    _atomic_write_json(STATE_FILE, state)
 
 
 def _desired_key(media_type: str, category_path: str) -> str:
@@ -424,6 +447,12 @@ def init_cache():
     except Exception as e:
         logger.warning(f"[EmbyLibCache] 初始化失败: {e}")
 
+    if load_discover_index_cache(_server_idx):
+        if _discover_index_cache_stale():
+            schedule_discover_index_refresh(server_idx=_server_idx, reason="startup_stale_cache", delay_sec=60)
+    else:
+        schedule_discover_index_refresh(server_idx=_server_idx, reason="startup_cache_miss", delay_sec=5, force=True)
+
 
 def apply_settings(sc: dict):
     """保存子分类设置时调用，更新内存状态并在必要时刷新快照。"""
@@ -753,3 +782,282 @@ def _guess_collection_type(path: str, media_type: Optional[str] = None) -> str:
         if kw in path:
             return "movies"
     return "tvshows"
+
+
+def _normalize_for_discover(title: str) -> str:
+    from app.routers.discover import _normalize_library_title, _extract_season_from_title
+    clean, _ = _extract_season_from_title(title)
+    clean = clean or title
+    for prefix in ("电视剧", "电影", "纪录片", "综艺节目", "综艺"):
+        if clean.startswith(prefix):
+            clean = clean[len(prefix):].strip()
+            break
+    return _normalize_library_title(clean)
+
+
+def _serialize_discover_series_index(series_index: dict[str, dict[int, set[int]]]) -> dict:
+    result = {}
+    for tmdb_id, seasons in (series_index or {}).items():
+        if not isinstance(seasons, dict):
+            continue
+        season_map = {}
+        for season, episodes in seasons.items():
+            try:
+                season_key = str(int(season))
+                season_map[season_key] = sorted({int(ep) for ep in episodes})
+            except Exception:
+                continue
+        result[str(tmdb_id)] = season_map
+    return result
+
+
+def _deserialize_discover_series_index(raw: dict) -> dict[str, dict[int, set[int]]]:
+    result: dict[str, dict[int, set[int]]] = {}
+    if not isinstance(raw, dict):
+        return result
+    for tmdb_id, seasons in raw.items():
+        if not tmdb_id or not isinstance(seasons, dict):
+            continue
+        season_map: dict[int, set[int]] = {}
+        for season, episodes in seasons.items():
+            try:
+                season_num = int(season)
+            except Exception:
+                continue
+            if not isinstance(episodes, list):
+                continue
+            episode_set = set()
+            for ep in episodes:
+                try:
+                    episode_set.add(int(ep))
+                except Exception:
+                    continue
+            season_map[season_num] = episode_set
+        result[str(tmdb_id)] = season_map
+    return result
+
+
+def _load_discover_index_file() -> dict:
+    if not os.path.exists(EMBY_DISCOVER_INDEX_FILE):
+        return {}
+    data = _read_json_file(EMBY_DISCOVER_INDEX_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _save_discover_index_file(payload: dict) -> None:
+    _atomic_write_json(EMBY_DISCOVER_INDEX_FILE, payload)
+
+
+def _apply_discover_index_cache(payload: dict, expected_server_idx: int) -> bool:
+    global _discover_index, _discover_series_index, _discover_items, _discover_index_meta, _discover_index_built, _discover_index_last_finished_at
+    meta = payload.get("_meta") if isinstance(payload, dict) else {}
+    if not isinstance(meta, dict) or meta.get("version") != DISCOVER_INDEX_VERSION:
+        return False
+    if int(meta.get("server_idx", 0) or 0) != int(expected_server_idx or 0):
+        return False
+    index = payload.get("discover_index") or {}
+    items = payload.get("items") or {}
+    if not isinstance(index, dict) or not isinstance(items, dict):
+        return False
+    series_index = _deserialize_discover_series_index(payload.get("series_index") or {})
+    with _discover_index_lock:
+        _discover_index = {str(k): str(v) for k, v in index.items() if k and v}
+        _discover_series_index = series_index
+        _discover_items = {str(k): v for k, v in items.items() if isinstance(v, dict)}
+        _discover_index_meta = dict(meta)
+        _discover_index_built = True
+        _discover_index_last_finished_at = float(meta.get("updated_at", 0) or 0)
+    return True
+
+
+def load_discover_index_cache(server_idx: int = 0) -> bool:
+    payload = _load_discover_index_file()
+    if not payload:
+        return False
+    loaded = _apply_discover_index_cache(payload, server_idx)
+    if loaded:
+        meta = payload.get("_meta") or {}
+        logger.info(
+            f"[EmbyLibCache] 已加载 Emby 可用性索引缓存: keys={meta.get('index_key_count', 0)} "
+            f"series={meta.get('series_count', 0)} updated_at={meta.get('updated_at', 0)}"
+        )
+    return loaded
+
+
+def _discover_index_cache_stale() -> bool:
+    with _discover_index_lock:
+        updated_at = float(_discover_index_meta.get("updated_at", 0) or 0)
+    return not updated_at or time.time() - updated_at > DISCOVER_INDEX_TTL_SECONDS
+
+
+def get_discover_index_meta() -> dict:
+    with _discover_index_lock:
+        return dict(_discover_index_meta)
+
+
+def get_discover_item(tmdb_id: str | int | None, media_type: str) -> dict | None:
+    key = f"{str(tmdb_id or '').strip()}:{media_type}"
+    with _discover_index_lock:
+        item = _discover_items.get(key)
+        return dict(item) if isinstance(item, dict) else None
+
+
+def schedule_discover_index_refresh(server_idx: int = 0, reason: str = "manual", delay_sec: float = 30, force: bool = False) -> None:
+    global _discover_index_timer, _discover_index_refresh_pending, _discover_index_pending_reason
+    now = time.time()
+    with _discover_index_lock:
+        if _discover_index_building:
+            _discover_index_refresh_pending = True
+            _discover_index_pending_reason = reason
+            logger.info(f"[EmbyLibCache] Emby 可用性索引刷新中，已合并请求: {reason}")
+            return
+        if not force and _discover_index_last_finished_at and now - _discover_index_last_finished_at < DISCOVER_INDEX_MIN_REFRESH_INTERVAL:
+            logger.info(f"[EmbyLibCache] 跳过 Emby 可用性索引刷新，距离上次刷新不足 5 分钟: {reason}")
+            return
+        if _discover_index_timer and _discover_index_timer.is_alive():
+            if force:
+                _discover_index_timer.cancel()
+            else:
+                logger.info(f"[EmbyLibCache] Emby 可用性索引刷新已在队列中，合并请求: {reason}")
+                return
+        timer = threading.Timer(max(0.0, float(delay_sec or 0)), build_discover_index, kwargs={
+            "server_idx": server_idx,
+            "reason": reason,
+            "force": force,
+        })
+        timer.daemon = True
+        _discover_index_timer = timer
+        timer.start()
+        logger.info(f"[EmbyLibCache] 已调度 Emby 可用性索引刷新: reason={reason}, delay={delay_sec}s")
+
+
+def build_discover_index(server_idx: int = 0, reason: str = "manual", force: bool = False) -> None:
+    global _discover_index, _discover_series_index, _discover_items, _discover_index_meta
+    global _discover_index_built, _discover_index_building, _discover_index_refresh_pending
+    global _discover_index_last_finished_at, _discover_index_pending_reason
+    with _discover_index_lock:
+        if _discover_index_building:
+            _discover_index_refresh_pending = True
+            if reason:
+                _discover_index_pending_reason = reason
+            return
+        _discover_index_building = True
+    pending_reason = ""
+    try:
+        start_time = time.time()
+        client = _create_client(server_idx)
+        if not client:
+            return
+        items = client.get_all_library_items()
+        index: dict[str, str] = {}
+        series_index: dict[str, dict[int, set[int]]] = {}
+        discover_items: dict[str, dict] = {}
+        series_error_count = 0
+        for key, meta in items.items():
+            if not isinstance(meta, dict):
+                continue
+            tmdb_id = str(meta.get("tmdb_id", "") or "")
+            media_type = meta.get("media_type", "")
+            year = str(meta.get("year", "") or "")
+            if not tmdb_id:
+                continue
+            discover_items[f"{tmdb_id}:{media_type}"] = dict(meta)
+            index[f"tmdb:{tmdb_id}:{media_type}"] = tmdb_id
+            for field in ("title", "original_title"):
+                norm = _normalize_for_discover(meta.get(field, "") or "")
+                if not norm:
+                    continue
+                if year:
+                    index[f"title:{norm}:{year}:{media_type}"] = tmdb_id
+                index.setdefault(f"title:{norm}:{media_type}", tmdb_id)
+            if media_type == "tv":
+                try:
+                    series_index[tmdb_id] = client.get_series_episode_counts_by_id(meta.get("emby_id"))
+                except Exception as e:
+                    series_error_count += 1
+                    logger.debug(f"[EmbyLibCache] 剧集季集索引构建失败 TMDB:{tmdb_id}: {e}")
+        now = _now_ts()
+        meta = {
+            "version": DISCOVER_INDEX_VERSION,
+            "updated_at": now,
+            "server_idx": int(server_idx or 0),
+            "item_count": len(discover_items),
+            "index_key_count": len(index),
+            "series_count": len(series_index),
+            "series_error_count": series_error_count,
+            "build_duration_sec": round(time.time() - start_time, 3),
+            "reason": reason,
+        }
+        payload = {
+            "_meta": meta,
+            "discover_index": index,
+            "series_index": _serialize_discover_series_index(series_index),
+            "items": discover_items,
+        }
+        with _discover_index_lock:
+            _discover_index = index
+            _discover_series_index = series_index
+            _discover_items = discover_items
+            _discover_index_meta = meta
+            _discover_index_built = True
+            _discover_index_last_finished_at = time.time()
+        try:
+            _save_discover_index_file(payload)
+        except Exception as e:
+            logger.warning(f"[EmbyLibCache] Emby 可用性索引落盘失败: {e}")
+        logger.info(
+            f"[EmbyLibCache] Emby 可用性索引已构建: {len(index)} 条, {len(series_index)} 部剧集, "
+            f"耗时 {meta['build_duration_sec']} 秒, reason={reason}"
+        )
+    except Exception as e:
+        logger.warning(f"[EmbyLibCache] Emby 可用性索引构建失败，沿用旧缓存: {e}")
+    finally:
+        with _discover_index_lock:
+            _discover_index_building = False
+            if _discover_index_refresh_pending:
+                pending_reason = _discover_index_pending_reason or "pending_after_refresh"
+                _discover_index_refresh_pending = False
+                _discover_index_pending_reason = ""
+        if pending_reason:
+            schedule_discover_index_refresh(server_idx=server_idx, reason=pending_reason, delay_sec=60)
+
+
+def lookup_discover_tmdb_id(title: str, year: str, media_type: str) -> str | None:
+    norm = _normalize_for_discover(title)
+    if not norm:
+        return None
+    with _discover_index_lock:
+        if year:
+            result = _discover_index.get(f"title:{norm}:{year}:{media_type}")
+            if result:
+                return result
+        return _discover_index.get(f"title:{norm}:{media_type}")
+
+
+def discover_tmdb_id_exists(tmdb_id: str | int | None, media_type: str) -> bool:
+    tmdb_id = str(tmdb_id or "").strip()
+    if not tmdb_id:
+        return False
+    with _discover_index_lock:
+        return f"tmdb:{tmdb_id}:{media_type}" in _discover_index
+
+
+def get_discover_series_status(tmdb_id: str | int | None) -> dict:
+    tmdb_id = str(tmdb_id or "").strip()
+    if not tmdb_id:
+        return {"exists": False, "seasons": {}}
+    with _discover_index_lock:
+        seasons = _discover_series_index.get(tmdb_id, {})
+        normalized = {
+            str(season): sorted(episodes)
+            for season, episodes in seasons.items()
+        }
+        return {
+            "exists": f"tmdb:{tmdb_id}:tv" in _discover_index,
+            "seasons": normalized,
+        }
+
+
+def get_discover_index_ready() -> bool:
+    with _discover_index_lock:
+        return _discover_index_built

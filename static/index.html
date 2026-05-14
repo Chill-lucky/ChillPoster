@@ -3655,15 +3655,19 @@
                                     <div v-if="detailModal.detail.media_type === 'tv' && detailModal.detail.seasons && detailModal.detail.seasons.filter(s => s.season_number > 0).length" class="detail-section detail-section-flat detail-season-panel">
                                         <div class="detail-section-title">分季信息</div>
                                         <div class="detail-season-chips">
-                                            <button v-for="s in detailModal.detail.seasons.filter(s => s.season_number > 0)" :key="'chip_' + s.season_number" class="detail-season-chip" :class="{ active: detailModal.selectedSeason === s.season_number }" @click="setDetailSeason(s.season_number)">
-                                                第 {{ s.season_number }} 季
+                                            <button v-for="s in detailModal.detail.seasons.filter(s => s.season_number > 0)" :key="'chip_' + s.season_number" class="detail-season-chip" :class="{ active: detailModal.selectedSeason === s.season_number, exists: getSeasonLibraryState(s).status === 'exists', partial: getSeasonLibraryState(s).status === 'partial' }" @click="setDetailSeason(s.season_number)">
+                                                <span>第 {{ s.season_number }} 季</span>
+                                                <span class="detail-season-chip-status">{{ getSeasonLibraryState(s).label }}</span>
                                             </button>
                                         </div>
                                         <div class="detail-seasons-list detail-seasons-list-fullscreen">
                                             <div v-for="s in detailModal.detail.seasons.filter(s => s.season_number > 0)" v-show="detailModal.selectedSeason === s.season_number" :key="s.season_number" class="detail-season-row detail-season-row-active">
                                                 <img v-if="s.poster_path" :src="'/api/discover/tmdb_img?path=' + s.poster_path" class="detail-season-poster detail-season-poster-lg" loading="lazy" />
                                                 <div class="detail-season-info">
-                                                    <div class="detail-season-name">第 {{ s.season_number }} 季</div>
+                                                    <div class="detail-season-name">
+                                                        <span>第 {{ s.season_number }} 季</span>
+                                                        <span class="detail-library-badge" :class="getSeasonLibraryState(s).status">{{ getSeasonLibraryState(s).label }}</span>
+                                                    </div>
                                                     <div class="detail-season-meta">
                                                         <span>{{ s.episode_count }} 集</span>
                                                         <span v-if="s.air_date"> · {{ s.air_date }}</span>
@@ -3674,6 +3678,28 @@
                                                 <button class="detail-season-subscribe detail-season-subscribe-lg" :class="{ subscribed: detailModal.seasonSubscribed && detailModal.selectedSeason === s.season_number }" @click.stop="toggleDetailSeasonSubscription(s.season_number)">
                                                     <i :class="detailModal.seasonSubscribed && detailModal.selectedSeason === s.season_number ? 'fa-solid fa-bell-slash' : 'fa-solid fa-bell'"></i>
                                                 </button>
+                                            </div>
+                                        </div>
+
+                                        <div v-if="detailModal.selectedSeason != null" class="detail-episodes-section">
+                                            <div v-if="detailModal.seasonEpisodesLoading[detailModal.selectedSeason]" class="detail-episodes-loading">
+                                                <i class="fa-solid fa-spinner fa-spin"></i> 加载集列表...
+                                            </div>
+                                            <div v-else-if="(detailModal.seasonEpisodes[detailModal.selectedSeason] || []).length" class="detail-episodes-list">
+                                                <div v-for="ep in detailModal.seasonEpisodes[detailModal.selectedSeason]" :key="ep.episode_number" class="detail-episode-row">
+                                                    <div class="detail-episode-info">
+                                                        <div class="detail-episode-title">
+                                                            <span class="detail-episode-num">{{ ep.episode_number }}</span>
+                                                            <span>{{ ep.name }}</span>
+                                                            <span class="detail-library-badge" :class="isEpisodeInLibrary(detailModal.selectedSeason, ep.episode_number) ? 'exists' : 'missing'">{{ isEpisodeInLibrary(detailModal.selectedSeason, ep.episode_number) ? '已入库' : '未入库' }}</span>
+                                                            <span v-if="ep.runtime" class="detail-episode-runtime">{{ ep.runtime }}分钟</span>
+                                                        </div>
+                                                        <div v-if="ep.air_date" class="detail-episode-date">{{ ep.air_date }}</div>
+                                                        <div v-if="ep.overview" class="detail-episode-overview">{{ ep.overview }}</div>
+                                                    </div>
+                                                    <img v-if="ep.still_path" :src="'/api/discover/tmdb_img?path=' + ep.still_path" class="detail-episode-still" loading="lazy" />
+                                                    <div v-else class="detail-episode-still detail-episode-still-placeholder"><i class="fa-solid fa-film"></i></div>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -3751,9 +3777,9 @@
                                                 </div>
                                                 <div class="detail-related-badges">
                                                     <span class="detail-related-type">{{ item.media_type === 'tv' ? '剧集' : '电影' }}</span>
-                                                    <span v-if="item.exists_in_library" class="detail-related-exists">已入库</span>
                                                     <span v-if="item.rating" class="detail-related-rating">{{ item.rating.toFixed(1) }}</span>
                                                 </div>
+                                                <span v-if="item.exists_in_library" class="badge-exists detail-related-exists-br">已入库</span>
                                                 <div class="mp-poster-mask">
                                                     <div class="mp-poster-title">{{ item.title }}</div>
                                                     <div class="mp-poster-year">{{ item.year || '未知年份' }}</div>
@@ -3774,9 +3800,9 @@
                                                 </div>
                                                 <div class="detail-related-badges">
                                                     <span class="detail-related-type">{{ item.media_type === 'tv' ? '剧集' : '电影' }}</span>
-                                                    <span v-if="item.exists_in_library" class="detail-related-exists">已入库</span>
                                                     <span v-if="item.rating" class="detail-related-rating">{{ item.rating.toFixed(1) }}</span>
                                                 </div>
+                                                <span v-if="item.exists_in_library" class="badge-exists detail-related-exists-br">已入库</span>
                                                 <div class="mp-poster-mask">
                                                     <div class="mp-poster-title">{{ item.title }}</div>
                                                     <div class="mp-poster-year">{{ item.year || '未知年份' }}</div>

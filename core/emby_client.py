@@ -578,7 +578,6 @@ class EmbyClient:
         if not tmdb_id:
             return {}
         try:
-            # 1. 查找 Emby 中的 Series ID
             params = {
                 "Recursive": "true",
                 "AnyProviderIdEquals": f"Tmdb.{tmdb_id}",
@@ -595,39 +594,51 @@ class EmbyClient:
             series_id = items[0].get("Id")
             if not series_id:
                 return {}
-
-            # 2. 先获取该剧的所有季
-            season_params = {
-                "ParentId": series_id,
-                "IncludeItemTypes": "Season",
-                "Fields": "Id,IndexNumber",
-            }
-            season_endpoint = f"emby/Users/{user_id}/Items" if user_id else "emby/Items"
-            season_res = self._request("GET", season_endpoint, params=season_params)
-
-            # 3. 逐季获取集数
-            result = {}
-            for season_item in season_res.get("Items", []):
-                season_num = season_item.get("IndexNumber")
-                season_id = season_item.get("Id")
-                if season_num is None or not season_id:
-                    continue
-                ep_params = {
-                    "ParentId": season_id,
-                    "IncludeItemTypes": "Episode",
-                    "Fields": "IndexNumber",
-                    "Limit": 10000,
-                }
-                ep_res = self._request("GET", season_endpoint, params=ep_params)
-                for ep in ep_res.get("Items", []):
-                    ep_num = ep.get("IndexNumber")
-                    if ep_num is not None:
-                        result.setdefault(season_num, set()).add(ep_num)
-
+            result = self.get_series_episode_counts_by_id(series_id)
             logger.debug(f"[剧集集数] TMDB:{tmdb_id} Series:{series_id} 结果: { {k: len(v) for k, v in result.items()} }")
             return result
         except Exception as e:
             logger.warning(f"获取剧集集数失败 ({tmdb_id}): {e}")
+            return {}
+
+    def get_series_episode_counts_by_id(self, series_id: str) -> dict:
+        if not series_id:
+            return {}
+        user_id = self._get_user_id()
+        endpoint = f"emby/Users/{user_id}/Items" if user_id else "emby/Items"
+        try:
+            result = {}
+            start = 0
+            limit = 1000
+            while True:
+                params = {
+                    "ParentId": series_id,
+                    "Recursive": "true",
+                    "IncludeItemTypes": "Episode",
+                    "Fields": "ParentIndexNumber,IndexNumber",
+                    "StartIndex": start,
+                    "Limit": limit,
+                }
+                data = self._request("GET", endpoint, params=params)
+                items = data.get("Items", []) if isinstance(data, dict) else []
+                if not items:
+                    break
+                for item in items:
+                    season_num = item.get("ParentIndexNumber")
+                    ep_num = item.get("IndexNumber")
+                    if season_num is None or ep_num is None:
+                        continue
+                    try:
+                        result.setdefault(int(season_num), set()).add(int(ep_num))
+                    except Exception:
+                        continue
+                total = data.get("TotalRecordCount", 0) if isinstance(data, dict) else 0
+                start += len(items)
+                if not total or start >= total:
+                    break
+            return result
+        except Exception as e:
+            logger.warning(f"获取剧集集数失败 (Series:{series_id}): {e}")
             return {}
 
     def ensure_library_exists(self, name, path, collection_type="movies", enable_scrapers=False):
@@ -823,7 +834,7 @@ class EmbyClient:
             params = {
                 "Recursive": "true",
                 "IncludeItemTypes": item_types,
-                "Fields": "ProviderIds",
+                "Fields": "ProviderIds,Name,OriginalTitle,ProductionYear",
                 "StartIndex": start,
                 "Limit": limit,
             }
@@ -842,7 +853,14 @@ class EmbyClient:
                     continue
                 emby_type = item.get("Type", "")
                 media_type = "tv" if emby_type == "Series" else "movie"
-                results[f"{tmdb_id}:{media_type}"] = True
+                results[f"{tmdb_id}:{media_type}"] = {
+                    "emby_id": item.get("Id", "") or "",
+                    "tmdb_id": str(tmdb_id),
+                    "media_type": media_type,
+                    "title": item.get("Name", "") or "",
+                    "original_title": item.get("OriginalTitle", "") or "",
+                    "year": str(item.get("ProductionYear", "") or ""),
+                }
             total = data.get("TotalRecordCount", 0)
             start += limit
             if start >= total:

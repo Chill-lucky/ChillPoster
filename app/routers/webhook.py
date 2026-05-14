@@ -67,6 +67,8 @@ async def emby_webhook_trigger(request: Request):
         return {"status": "ignored", "reason": f"Event '{event_type}' not watched"}
 
     if event_type in delete_events:
+        from app.services.emby_library_cache import schedule_discover_index_refresh
+        schedule_discover_index_refresh(reason="webhook:delete", delay_sec=30, force=True)
         return {"status": "ok", "action": "ignored_delete_event"}
 
     item_data = data.get("Item", {})
@@ -354,4 +356,6 @@ async def emby_webhook_trigger(request: Request):
         )
         triggered_count += 1
 
+    from app.services.emby_library_cache import schedule_discover_index_refresh
+    schedule_discover_index_refresh(reason="webhook:update", delay_sec=60)
     return {"status": "queued", "targets_debounced": triggered_count}

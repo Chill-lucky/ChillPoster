@@ -149,11 +149,11 @@ def execute_task_logic(preset_filename, targets, mode="random", task_name="Unkno
             run_config = copy.deepcopy(base_config)
             run_config['title'] = t.get('library_name', 'Unknown')
 
-            # 使用全局翻译
-            if run_config['title'] in global_translations:
-                run_config['subtitle'] = global_translations[run_config['title']]
-            else:
-                run_config['subtitle'] = f"Collection {run_config['title']}"
+            if 'subtitle' not in run_config:
+                if run_config['title'] in global_translations:
+                    run_config['subtitle'] = global_translations[run_config['title']]
+                else:
+                    run_config['subtitle'] = f"Collection {run_config['title']}"
 
             client = EmbyClient(t.get('url', ''), t.get('key', ''), t.get('public_host'))
             p_limit = int(run_config.get('poster_count', 6))
