@@ -23,8 +23,8 @@ WATCH_SCAN_INTERVAL_SECONDS = 2
 FILE_STABLE_SECONDS = 5
 MAX_QUEUE_SIZE = 200
 MAX_HISTORY = 100
-DEFAULT_UPLOAD_WORKERS = 1
-MAX_UPLOAD_WORKERS = 2
+DEFAULT_UPLOAD_WORKERS = 5
+MAX_UPLOAD_WORKERS = 30
 TEMP_SUFFIXES = (
     ".crdownload",
     ".part",
@@ -329,7 +329,7 @@ class Drive115UploadService:
         target_cid = str(payload.get("target_cid") or "").strip()
         if not target_cid.isdigit() or target_cid == "0":
             raise ValueError("请选择非根目录的 115 目标文件夹")
-        concurrency = int(payload.get("concurrency") or 1)
+        concurrency = int(payload.get("concurrency") or DEFAULT_UPLOAD_WORKERS)
         concurrency = max(1, min(MAX_UPLOAD_WORKERS, concurrency))
         base = dict(existing or {})
         base.update({

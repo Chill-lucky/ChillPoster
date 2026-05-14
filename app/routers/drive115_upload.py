@@ -21,7 +21,7 @@ class UploadTaskPayload(BaseModel):
     watch_mode: str = "realtime"
     include_existing_on_start: bool = True
     delete_local_after_success: bool = True
-    concurrency: int = 1
+    concurrency: int = 5
 
 
 class TogglePayload(BaseModel):

@@ -3714,7 +3714,7 @@ createApp({
             watch_mode: 'realtime',
             include_existing_on_start: true,
             delete_local_after_success: true,
-            concurrency: 1
+            concurrency: 5
         });
         const upload115Browser = reactive({
             visible: false,
@@ -5874,7 +5874,7 @@ createApp({
             upload115Form.watch_mode = 'realtime';
             upload115Form.include_existing_on_start = true;
             upload115Form.delete_local_after_success = true;
-            upload115Form.concurrency = 1;
+            upload115Form.concurrency = 5;
             upload115Browser.visible = false;
             upload115LocalBrowser.visible = false;
         };
@@ -5896,7 +5896,7 @@ createApp({
             upload115Form.watch_mode = 'realtime';
             upload115Form.include_existing_on_start = true;
             upload115Form.delete_local_after_success = true;
-            upload115Form.concurrency = Number(task.concurrency || 1);
+            upload115Form.concurrency = Number(task.concurrency || 5);
             showCreate115Upload.value = true;
         };
 
@@ -5906,7 +5906,7 @@ createApp({
             if (!upload115Form.target_cid || upload115Form.target_cid === '0') return showToast('请选择 115 目标目录', 'error');
             try {
                 const payload = JSON.parse(JSON.stringify(upload115Form));
-                payload.concurrency = Number(payload.concurrency || 1);
+                payload.concurrency = Number(payload.concurrency || 5);
                 if (upload115EditingId.value) {
                     await axios.post(`/api/drive115_upload/tasks/${upload115EditingId.value}`, payload);
                 } else {

@@ -822,8 +822,7 @@
                                         <div>
                                             <label>上传并发</label>
                                             <select v-model.number="upload115Form.concurrency">
-                                                <option :value="1">1（推荐）</option>
-                                                <option :value="2">2</option>
+                                                <option v-for="n in 30" :key="n" :value="n">{{ n }}{{ n === 5 ? '（推荐）' : '' }}</option>
                                             </select>
                                         </div>
                                     </div>

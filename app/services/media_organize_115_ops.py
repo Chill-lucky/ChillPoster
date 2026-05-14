@@ -274,11 +274,10 @@ def _try_remove_empty_dir(client, dir_cid: str):
 # 文件操作（重命名 / 移动 / 字幕 / 上传）
 # ==========================================
 
-_WRITE_API_PACING_MIN_SECONDS = 1.0
-_WRITE_API_PACING_MAX_SECONDS = 1.5
+_WRITE_API_RATE_INTERVAL_SECONDS = 0.5
 _DIRECT_URL_PACING_MIN_SECONDS = 1.0
 _DIRECT_URL_PACING_MAX_SECONDS = 1.5
-_WRITE_API_LOCK = threading.Lock()
+_WRITE_API_RATE_LOCK = threading.Lock()
 _LAST_WRITE_API_AT = 0.0
 _DIRECT_URL_LOCK = threading.Lock()
 _LAST_DIRECT_URL_AT = 0.0
@@ -410,16 +409,15 @@ def run_115_write_request_sync(
     global _LAST_WRITE_API_AT
 
     for attempt in range(_WRITE_API_RATE_LIMIT_MAX_RETRIES + 1):
-        with _WRITE_API_LOCK:
+        with _WRITE_API_RATE_LOCK:
             now = time.monotonic()
-            pacing_seconds = random.uniform(_WRITE_API_PACING_MIN_SECONDS, _WRITE_API_PACING_MAX_SECONDS)
-            wait_seconds = pacing_seconds - (now - _LAST_WRITE_API_AT)
+            wait_seconds = _WRITE_API_RATE_INTERVAL_SECONDS - (now - _LAST_WRITE_API_AT)
             if wait_seconds > 0:
                 time.sleep(wait_seconds)
             _LAST_WRITE_API_AT = time.monotonic()
 
-            write_client = _clone_115_client_for_write(client)
-            response = request_factory(write_client)
+        write_client = _clone_115_client_for_write(client)
+        response = request_factory(write_client)
 
         if isinstance(response, dict) and not response.get("state", True):
             if _is_115_rate_limited_response(response) and attempt < _WRITE_API_RATE_LIMIT_MAX_RETRIES:
@@ -449,24 +447,23 @@ async def run_115_write_request(
 
     for attempt in range(_WRITE_API_RATE_LIMIT_MAX_RETRIES + 1):
         start_at = time.monotonic()
-        async with _thread_lock_context(_WRITE_API_LOCK):
-            try:
-                now = time.monotonic()
-                pacing_seconds = random.uniform(_WRITE_API_PACING_MIN_SECONDS, _WRITE_API_PACING_MAX_SECONDS)
-                wait_seconds = pacing_seconds - (now - _LAST_WRITE_API_AT)
-                if wait_seconds > 0:
-                    await asyncio.sleep(wait_seconds)
-                _LAST_WRITE_API_AT = time.monotonic()
+        async with _thread_lock_context(_WRITE_API_RATE_LOCK):
+            now = time.monotonic()
+            wait_seconds = _WRITE_API_RATE_INTERVAL_SECONDS - (now - _LAST_WRITE_API_AT)
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+            _LAST_WRITE_API_AT = time.monotonic()
 
-                write_client = _clone_115_client_for_write(client)
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(request_factory, write_client),
-                    timeout=_WRITE_REQUEST_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError as e:
-                elapsed = time.monotonic() - start_at
-                logger.warning(f"[115] {request_name}超时: 耗时={elapsed:.2f}s")
-                raise TimeoutError(f"{request_name}超时: {elapsed:.2f}s") from e
+        try:
+            write_client = _clone_115_client_for_write(client)
+            result = await asyncio.wait_for(
+                asyncio.to_thread(request_factory, write_client),
+                timeout=_WRITE_REQUEST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as e:
+            elapsed = time.monotonic() - start_at
+            logger.warning(f"[115] {request_name}超时: 耗时={elapsed:.2f}s")
+            raise TimeoutError(f"{request_name}超时: {elapsed:.2f}s") from e
 
         if isinstance(result, dict) and not result.get("state", True):
             if _is_115_rate_limited_response(result) and attempt < _WRITE_API_RATE_LIMIT_MAX_RETRIES:

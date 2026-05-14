@@ -1386,7 +1386,7 @@ class Drive115Service:
         client = P115Client(cookie)
         logger.info(f"[CleanUp] 开始执行定时清空: {task_name} | 目录 {len(folders)} 个 | 触发={'手动' if manual else '定时'}")
 
-        all_ids: list[int] = []
+        total_deleted_count = 0
         folder_results = []
         for folder in folders:
             cid = str((folder or {}).get("cid", "") or "").strip()
@@ -1396,33 +1396,40 @@ class Drive115Service:
                 folder_results.append({"cid": cid, "label": label, "status": "error", "deleted_count": 0, "message": message})
                 logger.warning(f"[CleanUp] {message}")
                 continue
-            result = await self.collect_115_folder_child_ids(client, cid, label)
-            folder_results.append({
-                "cid": cid,
-                "label": label,
-                "status": result.get("status"),
-                "deleted_count": len(result.get("ids") or []),
-                "message": result.get("message", ""),
-            })
-            all_ids.extend(result.get("ids") or [])
 
-        all_ids = list(dict.fromkeys(all_ids))
-        if not all_ids:
+            result = await self.collect_115_folder_child_ids(client, cid, label)
+            ids = list(dict.fromkeys(result.get("ids") or []))
+            if not ids:
+                folder_results.append({
+                    "cid": cid,
+                    "label": label,
+                    "status": result.get("status"),
+                    "deleted_count": 0,
+                    "message": result.get("message", "") or "没有待删除项",
+                })
+                continue
+
+            logger.info(f"[CleanUp] 准备删除目录内容: {task_name} | {label} | {len(ids)} 项")
+            ok, error = await self._delete_115_ids_once_with_retry(client, ids, f"{task_name} {label} size={len(ids)}")
+            if not ok:
+                message = f"批量删除失败: {label} | {error}"
+                folder_results.append({"cid": cid, "label": label, "status": "error", "deleted_count": 0, "message": message})
+                logger.error(f"[CleanUp] {message}")
+                return {"status": "error", "deleted_count": total_deleted_count, "folders": folder_results, "message": message}
+
+            deleted_count = len(ids)
+            total_deleted_count += deleted_count
+            folder_results.append({"cid": cid, "label": label, "status": "ok", "deleted_count": deleted_count, "message": "清理完成"})
+            logger.info(f"[CleanUp] 目录内容删除完成: {task_name} | {label} | 已删除 {deleted_count} 项")
+
+        if total_deleted_count <= 0:
             logger.info(f"[CleanUp] 定时清空完成: {task_name} | 没有待删除项")
             return {"status": "ok", "deleted_count": 0, "folders": folder_results, "message": "没有待删除项"}
 
-        logger.info(f"[CleanUp] 准备批量删除: {task_name} | 总计 {len(all_ids)} 项")
-        ok, error = await self._delete_115_ids_once_with_retry(client, all_ids, f"{task_name} size={len(all_ids)}")
-        if not ok:
-            message = f"批量删除失败: {error}"
-            logger.error(f"[CleanUp] {message}")
-            return {"status": "error", "deleted_count": 0, "folders": folder_results, "message": message}
-
-        deleted_count = len(all_ids)
-        logger.info(f"[CleanUp] 定时清空完成: {task_name} | 已删除 {deleted_count} 项")
+        logger.info(f"[CleanUp] 定时清空完成: {task_name} | 已删除 {total_deleted_count} 项")
         if task.get("clear_recycle_bin", True):
             await self._clear_recycle_bin(cookie, recycle_code)
-        return {"status": "ok", "deleted_count": deleted_count, "folders": folder_results, "message": f"清理完成，共删除 {deleted_count} 项"}
+        return {"status": "ok", "deleted_count": total_deleted_count, "folders": folder_results, "message": f"清理完成，共删除 {total_deleted_count} 项"}
 
     async def close(self):
         if self._http_client:
