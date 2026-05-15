@@ -51,6 +51,8 @@ createApp({
         // macOS Dock 面板管理
         // ==========================================
         const isMobile = ref(window.innerWidth < 769);
+        const isStandaloneWebApp = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+        document.documentElement.classList.toggle('standalone-webapp', isStandaloneWebApp);
         const openPanels = ref([]);
         const focusedPanel = ref(null);
         const showSettingsDrawer = ref(false);

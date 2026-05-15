@@ -9513,12 +9513,12 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
 
 @media (max-width: 768px) {
     .dashboard-layout {
-        padding-bottom: calc(112px + env(safe-area-inset-bottom)) !important;
+        padding-bottom: 0 !important;
     }
 
     .scroll-view,
     .designer-wrap {
-        padding-bottom: calc(112px + env(safe-area-inset-bottom)) !important;
+        padding-bottom: 0 !important;
     }
 
     .mobile-tabbar-v2 {
@@ -9931,7 +9931,7 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
         overflow-y: hidden !important;
         margin: 0 -14px;
         padding: 0 14px 7px !important;
-        scroll-snap-type: x proximity;
+        scroll-snap-type: none !important;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: none;
     }
@@ -9947,7 +9947,7 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
         border-radius: 20px !important;
         background: transparent !important;
         box-shadow: none !important;
-        scroll-snap-align: start;
+        scroll-snap-align: none !important;
     }
 
     .recent-media-poster {
@@ -10023,7 +10023,7 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
 /* Universal mobile page polish */
 @media (max-width: 768px) {
     .scroll-view {
-        padding: 16px 14px calc(112px + env(safe-area-inset-bottom)) !important;
+        padding: 16px 14px 64px !important;
     }
 
     .content-shell,
@@ -11764,7 +11764,7 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
         position: fixed !important;
         left: 20px !important;
         right: 20px !important;
-        bottom: max(12px, env(safe-area-inset-bottom)) !important;
+        bottom: 0 !important;
         top: auto !important;
         height: 64px !important;
         max-height: 64px !important;
@@ -11793,6 +11793,72 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
         max-height: 52px !important;
         margin: 0 !important;
         align-self: center !important;
+    }
+
+    html.standalone-webapp,
+    html.standalone-webapp body,
+    html.standalone-webapp #app {
+        overflow: visible !important;
+        overscroll-behavior-y: none !important;
+        background: #050713 !important;
+        background-image: none !important;
+    }
+
+    html.standalone-webapp body::after {
+        content: '';
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 110px;
+        background: linear-gradient(180deg, rgba(5, 7, 19, 0), rgba(5, 7, 19, 0.96) 36%, #050713 100%);
+        pointer-events: none;
+        z-index: 10025;
+    }
+
+    html.standalone-webapp .mobile-tabbar-v2 {
+        bottom: 0 !important;
+        height: 64px !important;
+        max-height: 64px !important;
+        min-height: 64px !important;
+        padding: 6px !important;
+        align-items: center !important;
+        transform: translate3d(0, -8px, 0) !important;
+        z-index: 2147483647 !important;
+    }
+
+    html.standalone-webapp .mobile-tabbar-v2::before {
+        inset: 5px 10px 6px !important;
+    }
+
+    html.standalone-webapp .mobile-tabbar-v2::after {
+        bottom: 7px !important;
+    }
+
+    html.standalone-webapp .main {
+        height: 100dvh !important;
+        max-height: 100dvh !important;
+        overflow: hidden !important;
+    }
+
+    html.standalone-webapp .content-area {
+        flex: 0 0 auto !important;
+        height: calc(100dvh - 62px - env(safe-area-inset-top) - 76px) !important;
+        max-height: calc(100dvh - 62px - env(safe-area-inset-top) - 76px) !important;
+        overflow: hidden !important;
+        background: #050713 !important;
+    }
+
+    html.standalone-webapp .dashboard-layout,
+    html.standalone-webapp .scroll-view,
+    html.standalone-webapp .designer-wrap {
+        height: 100% !important;
+        max-height: 100% !important;
+        min-height: 100% !important;
+        padding-bottom: 0 !important;
+        overflow-y: auto !important;
+        overscroll-behavior-y: contain !important;
+        background: #050713 !important;
     }
 }
 
