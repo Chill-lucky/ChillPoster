@@ -563,43 +563,39 @@ class MetaVideo(MetaBase):
 
         platform_name = None
         query_range = 1
+        consume_next = 0
 
-        prev_token = None
-        prev_idx = self._index - 2
-        if 0 <= prev_idx < len(tokens.tokens):
-            prev_token = tokens.tokens[prev_idx]
-
-        next_token = tokens.peek()
-
-        if streaming_platforms.is_streaming_platform(token):
-            platform_name = streaming_platforms.get_streaming_platform_name(token)
-        else:
-            for adjacent_token, is_next in [(prev_token, False), (next_token, True)]:
-                if not adjacent_token or platform_name:
+        current_idx = self._index - 1
+        token_list = tokens.tokens
+        candidates = []
+        for length in (3, 2, 1):
+            for start_idx in range(current_idx - length + 1, current_idx + 1):
+                end_idx = start_idx + length
+                if start_idx < 0 or end_idx > len(token_list) or not (start_idx <= current_idx < end_idx):
                     continue
+                parts = token_list[start_idx:end_idx]
+                for separator in [" ", "-", ""]:
+                    candidates.append((separator.join(parts), start_idx, end_idx))
 
-                for separator in [" ", "-"]:
-                    if is_next:
-                        combined_token = f"{token}{separator}{adjacent_token}"
-                    else:
-                        combined_token = f"{adjacent_token}{separator}{token}"
-
-                    if streaming_platforms.is_streaming_platform(combined_token):
-                        platform_name = streaming_platforms.get_streaming_platform_name(combined_token)
-                        query_range = 2
-                        if is_next:
-                            tokens.get_next()
-                        break
+        for candidate, start_idx, end_idx in candidates:
+            if streaming_platforms.is_streaming_platform(candidate):
+                platform_name = streaming_platforms.get_streaming_platform_name(candidate)
+                query_range = end_idx - start_idx
+                consume_next = max(0, end_idx - current_idx - 1)
+                break
 
         if not platform_name:
             return
 
+        for _ in range(consume_next):
+            tokens.get_next()
+
         web_tokens = ["WEB", "DL", "WEBDL", "WEBRIP"]
-        match_start_idx = self._index - query_range
-        match_end_idx = self._index - 1
+        match_start_idx = current_idx - (query_range - consume_next - 1)
+        match_end_idx = current_idx + consume_next
         start_index = max(0, match_start_idx - query_range)
-        end_index = min(len(tokens.tokens), match_end_idx + 1 + query_range)
-        tokens_to_check = tokens.tokens[start_index:end_index]
+        end_index = min(len(token_list), match_end_idx + 1 + query_range)
+        tokens_to_check = token_list[start_index:end_index]
 
         if any(tok and tok.upper() in web_tokens for tok in tokens_to_check):
             self.web_source = platform_name
