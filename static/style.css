@@ -802,10 +802,10 @@ body.login-page-body {
 .metric-sub-card-sparkline {
     position: absolute;
     right: 0;
-    bottom: 1px;
+    bottom: -1px;
     left: 0;
     z-index: 1;
-    height: 28px;
+    height: 38px;
     pointer-events: none;
     overflow: hidden;
 }
@@ -815,27 +815,67 @@ body.login-page-body {
     height: 100%;
     overflow: visible;
 }
+.metric-sub-card-sparkline-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+.metric-sub-card-sparkline-track {
+    transform-box: view-box;
+    transform-origin: 0 50%;
+}
 .metric-sub-card-sparkline-area {
-    opacity: 0.85;
-    transition: d 1.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 220ms ease;
+    opacity: 0.54;
+    transform-origin: 50% 100%;
+    transition: opacity 260ms ease, transform 520ms ease;
     will-change: d, opacity;
 }
 .metric-sub-card-sparkline-line {
     fill: none;
-    stroke-width: 1.5;
+    stroke-width: 1.65;
     stroke-linecap: round;
     stroke-linejoin: round;
-    opacity: 0.92;
-    filter: drop-shadow(0 0 6px rgba(58, 130, 190, 0.2));
-    transition: d 1.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 220ms ease, filter 220ms ease;
+    opacity: 0.98;
+    filter: drop-shadow(0 0 7px rgba(58, 130, 190, 0.26));
+    transition: opacity 260ms ease, filter 260ms ease, stroke-width 260ms ease;
+    will-change: d, opacity, filter, stroke-width;
+}
+.metric-sub-card-sparkline-edge {
+    fill: none;
+    stroke-width: 1.85;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.74;
+    filter: drop-shadow(0 0 8px rgba(91, 178, 220, 0.28));
+    transition: opacity 260ms ease, filter 260ms ease;
+    will-change: d, opacity, filter;
+}
+.metric-sub-card-sparkline-hold {
+    fill: none;
+    stroke-width: 2.35;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 1;
+    filter: drop-shadow(0 0 9px rgba(91, 178, 220, 0.38));
+    transition: opacity 260ms ease, filter 260ms ease;
     will-change: d, opacity, filter;
 }
 .metric-sub-card:hover .metric-sub-card-sparkline-area {
-    opacity: 1;
+    opacity: 0.66;
+    transform: scaleY(1.04);
 }
 .metric-sub-card:hover .metric-sub-card-sparkline-line {
     opacity: 1;
-    filter: drop-shadow(0 0 7px rgba(58, 130, 190, 0.26));
+    stroke-width: 1.9;
+    filter: drop-shadow(0 0 10px rgba(58, 130, 190, 0.34));
+}
+.metric-sub-card:hover .metric-sub-card-sparkline-edge {
+    opacity: 0.9;
+    filter: drop-shadow(0 0 12px rgba(91, 178, 220, 0.42));
+}
+.metric-sub-card:hover .metric-sub-card-sparkline-hold {
+    opacity: 1;
+    filter: drop-shadow(0 0 12px rgba(91, 178, 220, 0.5));
 }
 .metric-sub-card:hover .metric-sub-card-value {
     text-shadow: 0 0 12px rgba(84, 143, 214, 0.08);
@@ -873,7 +913,9 @@ body.login-page-body {
 .metric-sub-card--danger .metric-sub-card-value {
     color: #cf7a7a;
 }
-.metric-sub-card--danger .metric-sub-card-sparkline-line {
+.metric-sub-card--danger .metric-sub-card-sparkline-line,
+.metric-sub-card--danger .metric-sub-card-sparkline-hold,
+.metric-sub-card--danger .metric-sub-card-sparkline-edge {
     filter: drop-shadow(0 0 6px rgba(164, 88, 88, 0.2));
 }
 
@@ -6473,6 +6515,543 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
 .mp-main-wrap { min-height: 420px; margin-top: 18px; }
 .mp-search-section { margin-top: 18px; margin-bottom: 18px; }
 
+.missing-episode-page {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 24px 48px 104px;
+}
+#app[data-v-app] .content-area:not(.panel-mode) > .scroll-view.missing-episode-page {
+    padding: 24px 48px 104px;
+}
+.missing-episode-shell {
+    width: 100%;
+    max-width: none;
+    padding-top: 0;
+    flex: 1;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.missing-episode-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 14px;
+}
+.missing-episode-title-block h2 {
+    margin: 0 0 5px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 24px;
+    line-height: 1.2;
+}
+.missing-episode-subtitle {
+    color: var(--ui-text-muted);
+    font-size: 13px;
+}
+.missing-episode-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+.missing-episode-actions-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    min-width: min(420px, 42vw);
+}
+.missing-episode-filter-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+}
+.missing-episode-filter-btn {
+    min-height: 42px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.035);
+    color: var(--ui-text-main);
+    border-radius: 12px;
+    padding: 0 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color var(--ui-transition-fast), background var(--ui-transition-fast), color var(--ui-transition-fast);
+}
+.missing-episode-filter-btn:hover,
+.missing-episode-filter-btn.active {
+    border-color: rgba(139,92,246,0.36);
+    background: rgba(139,92,246,0.13);
+    color: #ddd6fe;
+}
+.missing-episode-filter-btn strong {
+    font-size: 15px;
+}
+.missing-episode-workspace {
+    display: grid;
+    grid-template-columns: 360px minmax(0, 1fr);
+    gap: 16px;
+    align-items: stretch;
+    flex: 1;
+    min-height: 0;
+}
+.missing-episode-sidebar,
+.missing-episode-results {
+    border: 1px solid rgba(255,255,255,0.07);
+    background: rgba(255,255,255,0.025);
+    border-radius: 16px;
+}
+.missing-episode-sidebar {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    overflow: hidden;
+}
+.missing-episode-results {
+    padding: 16px;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.missing-episode-status-card {
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(0,0,0,0.16);
+    border-radius: 14px;
+    padding: 14px;
+}
+.missing-episode-status-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--ui-text-muted);
+    font-size: 12px;
+}
+.missing-episode-big-number {
+    margin-top: 10px;
+    font-size: 46px;
+    line-height: 1;
+    font-weight: 800;
+    color: var(--ui-text-main);
+}
+.missing-episode-total-line {
+    margin-top: 8px;
+    color: var(--ui-text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+}
+.missing-episode-progress {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid rgba(139,92,246,0.25);
+    background: rgba(139,92,246,0.12);
+    color: #c4b5fd;
+    border-radius: 999px;
+    padding: 5px 8px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.missing-episode-progress.ok {
+    border-color: rgba(34,197,94,0.24);
+    background: rgba(34,197,94,0.12);
+    color: #86efac;
+}
+.missing-episode-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+.missing-episode-summary-card {
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 12px;
+    background: rgba(255,255,255,0.035);
+}
+.missing-episode-summary-card span {
+    display: block;
+    color: var(--ui-text-muted);
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+.missing-episode-summary-card strong {
+    color: var(--ui-text-main);
+    font-size: 24px;
+    line-height: 1;
+}
+.missing-episode-summary-card.partial { border-color: rgba(245,158,11,0.22); background: rgba(245,158,11,0.08); }
+.missing-episode-summary-card.missing { border-color: rgba(148,163,184,0.18); background: rgba(148,163,184,0.08); }
+.missing-episode-summary-card.exists { border-color: rgba(34,197,94,0.20); background: rgba(34,197,94,0.08); }
+.missing-episode-summary-card.total { border-color: rgba(139,92,246,0.22); background: rgba(139,92,246,0.08); }
+.missing-episode-control-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+.missing-episode-chip-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+.missing-episode-chip-grid.sort {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.missing-episode-chip-grid button {
+    min-height: 32px;
+    border: 1px solid rgba(255,255,255,0.07);
+    background: rgba(255,255,255,0.03);
+    color: var(--ui-text-muted);
+    border-radius: 10px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: border-color var(--ui-transition-fast), background var(--ui-transition-fast), color var(--ui-transition-fast);
+}
+.missing-episode-chip-grid button:hover,
+.missing-episode-chip-grid button.active {
+    border-color: rgba(139,92,246,0.36);
+    background: rgba(139,92,246,0.13);
+    color: #ddd6fe;
+}
+.missing-episode-error {
+    margin-top: 10px;
+    color: #fca5a5;
+    font-size: 13px;
+}
+.missing-episode-library-panel {
+    min-height: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.missing-episode-panel-title {
+    color: var(--ui-text-muted);
+    font-size: 12px;
+}
+.missing-episode-library-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding-right: 2px;
+}
+.missing-episode-library-item {
+    min-height: 38px;
+    border: 1px solid rgba(255,255,255,0.07);
+    background: rgba(255,255,255,0.03);
+    color: var(--ui-text-main);
+    border-radius: 10px;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color var(--ui-transition-fast), background var(--ui-transition-fast);
+}
+.missing-episode-library-item span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.missing-episode-library-item strong {
+    color: var(--ui-text-muted);
+    font-size: 13px;
+}
+.missing-episode-library-item:hover,
+.missing-episode-library-item.active {
+    border-color: rgba(139,92,246,0.34);
+    background: rgba(139,92,246,0.11);
+}
+.missing-episode-library-empty {
+    border: 1px dashed rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 14px;
+    color: var(--ui-text-muted);
+    font-size: 13px;
+}
+.missing-episode-list-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+.missing-episode-list-head h3 {
+    margin: 0 0 5px;
+    font-size: 18px;
+}
+.missing-episode-list-head p {
+    margin: 0;
+    color: var(--ui-text-muted);
+    font-size: 13px;
+}
+.missing-episode-view-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.missing-episode-view-controls label {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--ui-text-muted);
+    font-size: 12px;
+}
+.missing-episode-view-controls select {
+    height: 34px;
+    min-width: 118px;
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.045);
+    color: var(--ui-text-main);
+    padding: 0 30px 0 10px;
+    outline: none;
+    cursor: pointer;
+}
+.missing-episode-view-controls select:hover,
+.missing-episode-view-controls select:focus {
+    border-color: rgba(139,92,246,0.35);
+    background: rgba(139,92,246,0.10);
+}
+.missing-episode-search-control {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ui-text-muted);
+    font-size: 12px;
+}
+.missing-episode-search-box {
+    height: 34px;
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.045);
+    color: var(--ui-text-muted);
+    padding: 0 8px 0 10px;
+}
+.missing-episode-search-box:focus-within {
+    border-color: rgba(139,92,246,0.35);
+    background: rgba(139,92,246,0.10);
+}
+.missing-episode-search-box input {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--ui-text-main);
+    font-size: 13px;
+}
+.missing-episode-search-box button {
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.08);
+    color: var(--ui-text-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+.missing-episode-search-box button:hover {
+    color: var(--ui-text-main);
+    background: rgba(255,255,255,0.14);
+}
+.missing-episode-poster-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    grid-auto-rows: max-content;
+    gap: 14px;
+    align-items: start;
+    align-content: start;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding-right: 4px;
+    padding-bottom: 12px;
+}
+.missing-episode-poster-card {
+    min-width: 0;
+    cursor: pointer;
+}
+.missing-episode-poster-frame {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 2 / 3;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: #17171a;
+    transition: transform var(--ui-transition-fast), border-color var(--ui-transition-fast), box-shadow var(--ui-transition-fast);
+}
+.missing-episode-poster-card:hover .missing-episode-poster-frame {
+    transform: translateY(-2px);
+    border-color: rgba(139,92,246,0.42);
+    box-shadow: 0 14px 30px rgba(0,0,0,0.28);
+}
+.missing-episode-poster-frame img,
+.missing-episode-poster-placeholder {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.missing-episode-poster-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ui-text-muted);
+}
+.missing-episode-poster-badge {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    max-width: calc(100% - 16px);
+    border-radius: 999px;
+    padding: 4px 8px;
+    font-size: 11px;
+    line-height: 1;
+    font-weight: 700;
+    color: #dbeafe;
+    background: rgba(37,99,235,0.82);
+    box-shadow: 0 8px 18px rgba(0,0,0,0.28);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.missing-episode-poster-info {
+    padding: 8px 2px 0;
+}
+.missing-episode-poster-title {
+    color: var(--ui-text-main);
+    font-size: 13px;
+    line-height: 1.25;
+    font-weight: 700;
+    min-height: 32px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.missing-episode-poster-year {
+    margin-top: 3px;
+    color: var(--ui-text-muted);
+    font-size: 12px;
+}
+.missing-episode-poster-status,
+.missing-episode-poster-missing,
+.missing-episode-poster-brief {
+    margin-top: 5px;
+    font-size: 11px;
+    line-height: 1.35;
+}
+.missing-episode-poster-status {
+    display: inline-flex;
+    max-width: 100%;
+    border-radius: 999px;
+    padding: 3px 7px;
+    color: #fcd34d;
+    background: rgba(245,158,11,0.16);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.missing-episode-poster-status.missing {
+    color: #cbd5e1;
+    background: rgba(148,163,184,0.16);
+}
+.missing-episode-poster-status.exists {
+    color: #86efac;
+    background: rgba(34,197,94,0.14);
+}
+.missing-episode-poster-status.error {
+    color: #fca5a5;
+    background: rgba(239,68,68,0.14);
+}
+.missing-episode-poster-missing {
+    color: #fca5a5;
+}
+.missing-episode-poster-brief {
+    color: var(--ui-text-muted);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.missing-episode-poster-badge.error {
+    background: rgba(239, 68, 68, 0.14);
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.22);
+}
+.missing-episode-poster-badge.airing_recent_missing {
+    background: rgba(37,99,235,0.86);
+    color: #dbeafe;
+}
+.missing-episode-poster-badge.ended_missing {
+    background: rgba(161,98,7,0.88);
+    color: #fcd34d;
+}
+.missing-episode-poster-badge.partial_missing {
+    background: rgba(71,85,105,0.88);
+    color: #cbd5e1;
+}
+.missing-episode-empty {
+    min-height: 380px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--ui-text-muted);
+}
+.missing-episode-empty i {
+    font-size: 28px;
+    opacity: .42;
+}
+.missing-episode-skeleton-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 14px;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+.missing-episode-skeleton-row {
+    aspect-ratio: 2 / 3;
+    border-radius: 12px;
+    background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.09), rgba(255,255,255,0.04));
+    background-size: 200% 100%;
+    animation: mp-skeleton-loading 1.3s infinite;
+}
+
 .mp-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
@@ -6627,6 +7206,19 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
     .mp-filter-label { flex-basis: 32px; font-size: 13px; }
     .mp-filter-chip { min-height: 30px; font-size: 13px; padding: 0 10px; }
     .mp-grid { grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 10px; }
+    .missing-episode-page,
+    #app[data-v-app] .content-area:not(.panel-mode) > .scroll-view.missing-episode-page { padding: 16px 12px 96px; overflow-y: auto; }
+    .missing-episode-shell { width: 100%; height: auto; min-height: calc(100vh - 112px); overflow: visible; }
+    .missing-episode-workspace { grid-template-columns: 1fr; }
+    .missing-episode-sidebar,
+    .missing-episode-results { min-height: 360px; max-height: none; }
+    .missing-episode-library-list { max-height: 220px; flex: none; }
+    .missing-episode-list-head { flex-direction: column; }
+    .missing-episode-view-controls { width: 100%; justify-content: flex-start; }
+    .missing-episode-search-control { max-width: none; }
+    .missing-episode-filter-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .missing-episode-poster-grid,
+    .missing-episode-skeleton-list { max-height: 62vh; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); }
 }
 @media (max-width: 600px) {
     .mp-filter-row { flex-direction: column; align-items: stretch; gap: 6px; }
@@ -6634,6 +7226,18 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
     .mp-rating-wrap { width: 100%; }
     .mp-grid { grid-template-columns: repeat(3, 1fr); gap: 8px; }
     .mp-rating-value { width: 62px; font-size: 16px; height: 34px; }
+    .missing-episode-topbar { flex-direction: column; align-items: stretch; }
+    .missing-episode-actions-stack { width: 100%; min-width: 0; align-items: stretch; }
+    .missing-episode-actions { width: 100%; justify-content: stretch; }
+    .missing-episode-actions .btn { flex: 1; justify-content: center; }
+    .missing-episode-filter-strip { grid-template-columns: 1fr; }
+    .missing-episode-summary-grid { grid-template-columns: 1fr 1fr; }
+    .missing-episode-view-controls label,
+    .missing-episode-view-controls select,
+    .missing-episode-search-box { width: 100%; min-width: 0; }
+    .missing-episode-poster-grid,
+    .missing-episode-skeleton-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .missing-episode-poster-badge { font-size: 10px; padding: 4px 7px; }
 }
 
 /* --- 详情弹窗响应式 --- */
@@ -8074,6 +8678,40 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
     html[data-theme="light"] .mp-load-more-btn:hover {
         background: rgba(15, 23, 42, 0.05);
         color: var(--color-text-main);
+    }
+
+    html[data-theme="light"] .missing-episode-sidebar,
+    html[data-theme="light"] .missing-episode-results,
+    html[data-theme="light"] .missing-episode-status-card {
+        background: rgba(255, 255, 255, 0.78);
+        border-color: rgba(15, 23, 42, 0.08);
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+    }
+
+    html[data-theme="light"] .missing-episode-summary-card,
+    html[data-theme="light"] .missing-episode-poster-frame,
+    html[data-theme="light"] .missing-episode-library-item,
+    html[data-theme="light"] .missing-episode-chip-grid button,
+    html[data-theme="light"] .missing-episode-filter-btn,
+    html[data-theme="light"] .missing-episode-view-controls select,
+    html[data-theme="light"] .missing-episode-search-box {
+        background: rgba(15, 23, 42, 0.035);
+        border-color: rgba(15, 23, 42, 0.07);
+    }
+
+    html[data-theme="light"] .missing-episode-poster-card:hover .missing-episode-poster-frame {
+        border-color: rgba(139, 92, 246, 0.2);
+    }
+
+    html[data-theme="light"] .missing-episode-progress {
+        background: rgba(139, 92, 246, 0.10);
+        color: #7c3aed;
+        border-color: rgba(139, 92, 246, 0.18);
+    }
+
+    html[data-theme="light"] .missing-episode-poster-placeholder {
+        background: rgba(15, 23, 42, 0.04);
+        border-color: rgba(15, 23, 42, 0.07);
     }
 
     html[data-theme="light"] .mc-footer {
@@ -11875,4 +12513,168 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
     .mobile-more-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
     }
+}
+
+/* Desktop dashboard responsive hardening */
+@media (min-width: 769px) and (max-width: 1280px) {
+    #app[data-v-app] .content-area:not(.panel-mode) .dashboard-layout,
+    .dashboard-layout {
+        --dashboard-overview-height: auto;
+        display: flex !important;
+        flex-direction: column !important;
+        height: auto !important;
+        min-height: 100% !important;
+        padding-inline: clamp(16px, 2.4vw, 26px) !important;
+        gap: 14px !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+    }
+
+    .dashboard-top-row,
+    .stat-cards,
+    .dashboard-overview-grid,
+    .device-performance-grid {
+        min-width: 0;
+    }
+
+    .dashboard-top-row > *,
+    .stat-cards > *,
+    .dashboard-overview-grid > *,
+    .device-performance-grid > * {
+        min-width: 0;
+    }
+
+    .dashboard-top-row {
+        grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.35fr) !important;
+    }
+
+    .device-performance-grid {
+        grid-template-columns: repeat(3, minmax(132px, 1fr)) !important;
+        gap: 10px !important;
+    }
+
+    .metric-sub-card {
+        min-height: 76px;
+    }
+
+    .metric-sub-card-value {
+        font-size: clamp(18px, 2vw, 23px);
+    }
+
+    .stat-cards {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) !important;
+        gap: 14px !important;
+    }
+
+    .stat-card {
+        min-height: 118px;
+        padding: 20px;
+    }
+
+    .stat-num {
+        font-size: clamp(30px, 3.2vw, 38px);
+        letter-spacing: -0.045em;
+    }
+
+    .dashboard-overview-grid {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        grid-template-areas:
+            "recent playback"
+            "task task"
+            "stats stats" !important;
+        grid-auto-flow: dense;
+        grid-auto-rows: auto !important;
+        align-items: start;
+    }
+
+    .dashboard-recent-card {
+        grid-area: recent;
+    }
+
+    .dashboard-playback-card {
+        grid-area: playback;
+    }
+
+    .dashboard-task-card {
+        grid-area: task;
+    }
+
+    .dashboard-media-stats-card {
+        grid-area: stats;
+    }
+
+    .dashboard-section-card {
+        height: auto !important;
+        min-height: 0 !important;
+    }
+
+    .dashboard-recent-card,
+    .dashboard-playback-card {
+        min-height: clamp(360px, 42vw, 520px) !important;
+    }
+
+    .recent-media-row {
+        grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)) !important;
+        max-height: 440px;
+    }
+
+    .playback-hero-list,
+    .media-library-list {
+        max-height: 440px;
+    }
+
+    .dashboard-task-body {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+        grid-template-rows: minmax(0, 1fr) !important;
+    }
+}
+
+@media (min-width: 769px) and (max-width: 1040px) {
+    .dashboard-top-row {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    .device-performance-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    }
+
+    .dashboard-overview-grid {
+        grid-template-columns: minmax(0, 1fr) !important;
+        grid-template-areas:
+            "recent"
+            "playback"
+            "task"
+            "stats" !important;
+    }
+
+    .dashboard-recent-card,
+    .dashboard-playback-card {
+        min-height: 0 !important;
+    }
+}
+
+@media (min-width: 769px) and (max-width: 860px) {
+    #app[data-v-app] .content-area:not(.panel-mode) .dashboard-layout,
+    .dashboard-layout {
+        padding-inline: 14px !important;
+    }
+
+    .device-performance-grid,
+    .stat-cards,
+    .dashboard-task-body {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    .dashboard-task-body {
+        grid-template-rows: auto !important;
+    }
+}
+
+.device-performance-card .metric-sub-card-sparkline {
+    right: 0 !important;
+    bottom: -1px !important;
+    left: 0 !important;
+    top: auto !important;
+    height: 38px !important;
 }

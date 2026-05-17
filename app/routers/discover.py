@@ -9,7 +9,9 @@ import types
 import logging
 import random
 import importlib.util
+import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 
@@ -19,7 +21,14 @@ from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response, RedirectResponse, StreamingResponse
 
 from core.configs import global_config
-from app.services.emby_library_cache import discover_tmdb_id_exists, get_discover_series_status, lookup_discover_tmdb_id
+from app.services.emby_library_cache import (
+    discover_tmdb_id_exists,
+    get_discover_index_meta,
+    get_discover_index_ready,
+    get_discover_series_entries,
+    get_discover_series_status,
+    lookup_discover_tmdb_id,
+)
 from core import tmdb
 from core.douban import DoubanApi
 
@@ -1512,6 +1521,492 @@ async def media_detail(tmdb_id: int, type: str = Query("movie")):
 @router.get("/library/series/{tmdb_id}")
 def library_series_status(tmdb_id: int):
     return get_discover_series_status(tmdb_id)
+
+
+def _empty_missing_episode_summary() -> dict:
+    return {
+        "tvCount": 0,
+        "completeCount": 0,
+        "partialCount": 0,
+        "missingCount": 0,
+        "errorCount": 0,
+        "airingRecentMissingCount": 0,
+        "endedMissingCount": 0,
+        "otherMissingCount": 0,
+        "presentEpisodes": 0,
+        "totalEpisodes": 0,
+        "missingEpisodes": 0,
+    }
+
+
+def _build_missing_episode_season_brief(seasons: list[dict]) -> str:
+    missing_seasons = [season for season in seasons if int(season.get("missing") or 0) > 0]
+    parts = []
+    for season in missing_seasons[:3]:
+        missing_eps = season.get("missingEpisodes") or []
+        if missing_eps:
+            parts.append(f"S{season.get('seasonNumber')} 缺 {_format_episode_ranges(missing_eps)}")
+        else:
+            parts.append(f"S{season.get('seasonNumber')} 缺 {season.get('missing')}")
+    if len(missing_seasons) > 3:
+        parts.append(f"另 {len(missing_seasons) - 3} 季")
+    return " / ".join(parts)
+
+
+def _format_episode_ranges(episodes: list[int]) -> str:
+    nums = sorted({int(ep) for ep in episodes if str(ep).isdigit()})
+    if not nums:
+        return ""
+    ranges = []
+    start = end = nums[0]
+    for ep in nums[1:]:
+        if ep == end + 1:
+            end = ep
+        else:
+            ranges.append((start, end))
+            start = end = ep
+    ranges.append((start, end))
+    parts = []
+    for start, end in ranges:
+        if start == end:
+            parts.append(f"E{start:02d}")
+        else:
+            parts.append(f"E{start:02d}-E{end:02d}")
+    return ",".join(parts)
+
+
+def _classify_missing_episode_item(tmdb_status: str, seasons: list[dict], missing_episodes: int) -> tuple[str, str]:
+    if missing_episodes <= 0:
+        return "complete", "完整入库"
+    normalized_status = str(tmdb_status or "").strip().lower()
+    if normalized_status == "ended":
+        return "ended_missing", "已完结但缺集"
+
+    active_statuses = {"returning series", "in production", "planned", "pilot"}
+    if normalized_status in active_statuses:
+        numbered_seasons = [s for s in seasons if int(s.get("total") or 0) > 0]
+        if numbered_seasons:
+            latest = max(numbered_seasons, key=lambda s: int(s.get("seasonNumber") or 0))
+            total = int(latest.get("total") or 0)
+            missing_set = {int(ep) for ep in latest.get("missingEpisodes") or []}
+            recent_known = set(range(max(1, total - 2), total + 1))
+            if missing_set & recent_known:
+                return "airing_recent_missing", "正在连载但缺最近集"
+    return "partial_missing", "有缺集"
+
+
+def _build_missing_episode_stat(entry: dict, api_key: str) -> dict:
+    tmdb_id = str(entry.get("tmdb_id") or "").strip()
+    title = entry.get("title") or entry.get("original_title") or ""
+    year = str(entry.get("year") or "")[:4]
+    library_id = str(entry.get("library_id") or "")
+    library_name = entry.get("library_name") or "未分类媒体库"
+    base_item = {
+        "id": int(tmdb_id) if tmdb_id.isdigit() else tmdb_id,
+        "_tmdb_id": int(tmdb_id) if tmdb_id.isdigit() else tmdb_id,
+        "tmdb_id": int(tmdb_id) if tmdb_id.isdigit() else tmdb_id,
+        "title": title,
+        "original_title": entry.get("original_title") or "",
+        "year": year,
+        "poster_url": "",
+        "backdrop_url": "",
+        "rating": 0,
+        "overview": "",
+        "media_type": "tv",
+        "genre_ids": [],
+        "source": "tmdb",
+        "subscribed": False,
+        "exists_in_library": True,
+    }
+    try:
+        detail_cache_key = f"missing_episode_tv_detail_{tmdb_id}"
+        detail = _cache_get(detail_cache_key)
+        if not detail:
+            detail = tmdb.get_tv_details(int(tmdb_id), api_key, append_to_response="seasons")
+            if detail:
+                _cache_set(detail_cache_key, detail, ttl=24 * 60 * 60)
+        if not detail:
+            raise ValueError("未找到 TMDB 剧集详情")
+        normalized = _normalize_tmdb_detail(detail, "tv", int(tmdb_id))
+        local_seasons = entry.get("seasons") or {}
+        seasons = []
+        for season in normalized.get("seasons") or []:
+            season_number = season.get("season_number")
+            if season_number is None or int(season_number or 0) <= 0:
+                continue
+            season_number = int(season_number)
+            total = int(season.get("episode_count") or 0)
+            if total <= 0:
+                continue
+            expected = set(range(1, total + 1))
+            present_set = set()
+            for ep in local_seasons.get(str(season_number), []) or []:
+                try:
+                    ep_num = int(ep)
+                except Exception:
+                    continue
+                if ep_num in expected:
+                    present_set.add(ep_num)
+            missing_set = expected - present_set
+            seasons.append({
+                "seasonNumber": season_number,
+                "present": len(present_set),
+                "total": total,
+                "missing": len(missing_set),
+                "presentEpisodes": sorted(present_set),
+                "missingEpisodes": sorted(missing_set),
+            })
+        if not seasons:
+            raise ValueError("TMDB 无有效季集信息")
+        total_episodes = sum(season["total"] for season in seasons)
+        present_episodes = sum(season["present"] for season in seasons)
+        missing_episodes = sum(season["missing"] for season in seasons)
+        tmdb_status = detail.get("status") or normalized.get("status") or ""
+        missing_category, category_label = _classify_missing_episode_item(tmdb_status, seasons, missing_episodes)
+        if present_episodes >= total_episodes:
+            status = "exists"
+            label = f"已入库 {present_episodes}/{total_episodes}"
+        elif present_episodes > 0:
+            status = "partial"
+            label = f"部分入库 {present_episodes}/{total_episodes}"
+        else:
+            status = "missing"
+            label = "未入库"
+        poster_url = normalized.get("poster_url") or ""
+        backdrop_url = normalized.get("backdrop_url") or ""
+        item = {
+            **base_item,
+            "title": normalized.get("title") or title,
+            "original_title": normalized.get("original_title") or base_item["original_title"],
+            "year": normalized.get("year") or year,
+            "poster_url": poster_url,
+            "backdrop_url": backdrop_url,
+            "rating": normalized.get("vote_average") or normalized.get("rating") or 0,
+            "overview": normalized.get("overview") or "",
+        }
+        return {
+            "tmdbId": tmdb_id,
+            "item": item,
+            "title": item["title"],
+            "year": item["year"],
+            "poster_url": poster_url,
+            "backdrop_url": backdrop_url,
+            "status": status,
+            "label": label,
+            "missingCategory": missing_category,
+            "categoryLabel": category_label,
+            "tmdbStatus": tmdb_status,
+            "libraryId": library_id,
+            "libraryName": library_name,
+            "presentEpisodes": present_episodes,
+            "totalEpisodes": total_episodes,
+            "missingEpisodes": missing_episodes,
+            "seasons": seasons,
+            "seasonBrief": _build_missing_episode_season_brief(seasons),
+        }
+    except Exception as e:
+        return {
+            "tmdbId": tmdb_id,
+            "item": base_item,
+            "title": title,
+            "year": year,
+            "poster_url": "",
+            "backdrop_url": "",
+            "status": "error",
+            "label": "统计失败",
+            "missingCategory": "error",
+            "categoryLabel": "统计异常",
+            "tmdbStatus": "",
+            "libraryId": library_id,
+            "libraryName": library_name,
+            "presentEpisodes": 0,
+            "totalEpisodes": 0,
+            "missingEpisodes": 0,
+            "seasons": [],
+            "seasonBrief": str(e) or "请求失败",
+        }
+
+
+def _accumulate_missing_episode_summary(summary: dict, item: dict) -> None:
+    summary["tvCount"] += 1
+    status = item.get("status")
+    if status == "exists":
+        summary["completeCount"] += 1
+    elif status == "partial":
+        summary["partialCount"] += 1
+    elif status == "missing":
+        summary["missingCount"] += 1
+    elif status == "error":
+        summary["errorCount"] += 1
+    category = item.get("missingCategory")
+    if category == "airing_recent_missing":
+        summary["airingRecentMissingCount"] += 1
+    elif category == "ended_missing":
+        summary["endedMissingCount"] += 1
+    elif category == "partial_missing":
+        summary["otherMissingCount"] += 1
+    summary["presentEpisodes"] += int(item.get("presentEpisodes") or 0)
+    summary["totalEpisodes"] += int(item.get("totalEpisodes") or 0)
+    summary["missingEpisodes"] += int(item.get("missingEpisodes") or 0)
+
+
+def _build_missing_episode_libraries(results: list[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for item in results:
+        library_id = str(item.get("libraryId") or "")
+        library_name = item.get("libraryName") or "未分类媒体库"
+        key = library_id or library_name
+        library = grouped.setdefault(key, {
+            "libraryId": library_id,
+            "libraryName": library_name,
+            "summary": _empty_missing_episode_summary(),
+            "items": [],
+        })
+        library["items"].append(item)
+        _accumulate_missing_episode_summary(library["summary"], item)
+    libraries = list(grouped.values())
+    libraries.sort(key=lambda lib: (
+        -int(lib["summary"].get("missingEpisodes") or 0),
+        lib.get("libraryName") or "",
+    ))
+    return libraries
+
+
+def _build_missing_episode_libraries_from_entries(entries: list[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for entry in entries:
+        library_id = str(entry.get("library_id") or "")
+        library_name = entry.get("library_name") or "未分类媒体库"
+        key = library_id or library_name
+        library = grouped.setdefault(key, {
+            "libraryId": library_id,
+            "libraryName": library_name,
+            "summary": _empty_missing_episode_summary(),
+            "items": [],
+        })
+        library["summary"]["tvCount"] += 1
+    libraries = list(grouped.values())
+    libraries.sort(key=lambda lib: lib.get("libraryName") or "")
+    return libraries
+
+
+_missing_episode_stats_lock = threading.RLock()
+MISSING_EPISODE_TMDB_MAX_WORKERS = 12
+_missing_episode_stats_state: dict = {
+    "cache_key": "",
+    "running": False,
+    "payload": None,
+    "progress": {"current": 0, "total": 0},
+    "error": "",
+}
+
+
+def _sort_missing_episode_results(results: list[dict]) -> list[dict]:
+    priority = {"airing_recent_missing": 0, "ended_missing": 1, "partial_missing": 2, "error": 3, "complete": 4}
+    return sorted(results, key=lambda item: (
+        priority.get(item.get("missingCategory"), 5),
+        -int(item.get("missingEpisodes") or 0),
+        item.get("title") or "",
+    ))
+
+
+def _build_missing_episode_progress_payload(entries: list[dict], meta: dict, running: bool = False, message: str = "") -> dict:
+    summary = _empty_missing_episode_summary()
+    summary["tvCount"] = len(entries)
+    return {
+        "ready": True,
+        "running": running,
+        "meta": meta,
+        "summary": summary,
+        "items": [],
+        "libraries": _build_missing_episode_libraries_from_entries(entries),
+        "progress": {"current": 0, "total": len(entries)},
+        "message": message,
+    }
+
+
+def _store_missing_episode_progress(payload: dict, cache_key: str) -> None:
+    with _missing_episode_stats_lock:
+        _missing_episode_stats_state["cache_key"] = cache_key
+        _missing_episode_stats_state["payload"] = payload
+        _missing_episode_stats_state["progress"] = payload.get("progress") or {"current": 0, "total": 0}
+
+
+def _run_missing_episode_stats_job(entries: list[dict], api_key: str, meta: dict, cache_key: str) -> None:
+    results: list[dict] = []
+    total = len(entries)
+    payload = _build_missing_episode_progress_payload(entries, meta, running=True, message="正在统计剧集缺集...")
+    _store_missing_episode_progress(payload, cache_key)
+    try:
+        max_workers = min(MISSING_EPISODE_TMDB_MAX_WORKERS, max(1, total))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_build_missing_episode_stat, entry, api_key) for entry in entries]
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    logger.debug(f"[Discover] 缺集统计条目计算失败: {e}")
+                sorted_results = _sort_missing_episode_results(results)
+                summary = _empty_missing_episode_summary()
+                for item in sorted_results:
+                    _accumulate_missing_episode_summary(summary, item)
+                summary["tvCount"] = total
+                progress_payload = {
+                    "ready": True,
+                    "running": True,
+                    "meta": meta,
+                    "summary": summary,
+                    "items": sorted_results,
+                    "libraries": _merge_missing_episode_libraries(entries, sorted_results),
+                    "progress": {"current": len(results), "total": total},
+                    "message": "正在统计剧集缺集...",
+                }
+                _store_missing_episode_progress(progress_payload, cache_key)
+
+        final_results = _sort_missing_episode_results(results)
+        final_summary = _empty_missing_episode_summary()
+        for item in final_results:
+            _accumulate_missing_episode_summary(final_summary, item)
+        final_summary["tvCount"] = total
+        final_payload = {
+            "ready": True,
+            "running": False,
+            "meta": meta,
+            "summary": final_summary,
+            "items": final_results,
+            "libraries": _merge_missing_episode_libraries(entries, final_results),
+            "progress": {"current": len(results), "total": total},
+            "message": "统计完成",
+        }
+        _cache_set(cache_key, final_payload, ttl=3600)
+        _store_missing_episode_progress(final_payload, cache_key)
+    except Exception as e:
+        logger.warning(f"[Discover] 缺集统计后台任务失败: {e}")
+        with _missing_episode_stats_lock:
+            _missing_episode_stats_state["error"] = str(e)
+    finally:
+        with _missing_episode_stats_lock:
+            _missing_episode_stats_state["running"] = False
+
+
+def _merge_missing_episode_libraries(entries: list[dict], results: list[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    entry_counts: dict[str, int] = {}
+    for entry in entries:
+        library_id = str(entry.get("library_id") or "")
+        library_name = entry.get("library_name") or "未分类媒体库"
+        key = library_id or library_name
+        entry_counts[key] = entry_counts.get(key, 0) + 1
+        library = grouped.setdefault(key, {
+            "libraryId": library_id,
+            "libraryName": library_name,
+            "summary": _empty_missing_episode_summary(),
+            "items": [],
+        })
+
+    for item in results:
+        library_id = str(item.get("libraryId") or "")
+        library_name = item.get("libraryName") or "未分类媒体库"
+        key = library_id or library_name
+        library = grouped.setdefault(key, {
+            "libraryId": library_id,
+            "libraryName": library_name,
+            "summary": _empty_missing_episode_summary(),
+            "items": [],
+        })
+        library["items"].append(item)
+        _accumulate_missing_episode_summary(library["summary"], item)
+
+    for key, library in grouped.items():
+        library["summary"]["tvCount"] = entry_counts.get(key, int(library["summary"].get("tvCount") or 0))
+
+    libraries = list(grouped.values())
+    libraries.sort(key=lambda lib: (
+        -int(lib["summary"].get("missingEpisodes") or 0),
+        lib.get("libraryName") or "",
+    ))
+    return libraries
+
+
+def _build_missing_episode_stats_payload(entries: list[dict], api_key: str, meta: dict) -> dict:
+    summary = _empty_missing_episode_summary()
+    if not entries:
+        return {"ready": True, "meta": meta, "summary": summary, "items": [], "libraries": []}
+    max_workers = min(MISSING_EPISODE_TMDB_MAX_WORKERS, max(1, len(entries)))
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_build_missing_episode_stat, entry, api_key) for entry in entries]
+        for future in as_completed(futures):
+            try:
+                results.append(future.result())
+            except Exception as e:
+                logger.debug(f"[Discover] 缺集统计条目计算失败: {e}")
+    results = _sort_missing_episode_results(results)
+    for item in results:
+        _accumulate_missing_episode_summary(summary, item)
+    return {
+        "ready": True,
+        "meta": meta,
+        "summary": summary,
+        "items": results,
+        "libraries": _build_missing_episode_libraries(results),
+    }
+
+
+@router.get("/library/missing-episode-stats")
+def library_missing_episode_stats(
+    refresh: int = Query(0, ge=0, le=1),
+    start: int = Query(0, ge=0, le=1),
+):
+    meta = get_discover_index_meta()
+    if not get_discover_index_ready():
+        return {
+            "ready": False,
+            "meta": meta,
+            "summary": _empty_missing_episode_summary(),
+            "items": [],
+            "libraries": [],
+            "message": "Emby 媒体库索引正在构建，请稍后刷新。",
+        }
+    api_key = _get_tmdb_key()
+    if not api_key:
+        raise HTTPException(400, "未配置 TMDB API Key")
+    entries = get_discover_series_entries()
+    cache_key = f"library_missing_episode_stats_v3_{meta.get('updated_at', 0)}"
+    with _missing_episode_stats_lock:
+        if (
+            _missing_episode_stats_state.get("cache_key") == cache_key
+            and _missing_episode_stats_state.get("payload")
+            and _missing_episode_stats_state.get("running")
+        ):
+            return _missing_episode_stats_state["payload"]
+
+    if start or refresh:
+        initial_payload = _build_missing_episode_progress_payload(entries, meta, running=True, message="正在统计剧集缺集...")
+        with _missing_episode_stats_lock:
+            _missing_episode_stats_state.update({
+                "cache_key": cache_key,
+                "running": True,
+                "payload": initial_payload,
+                "progress": initial_payload["progress"],
+                "error": "",
+            })
+        worker = threading.Thread(
+            target=_run_missing_episode_stats_job,
+            args=(entries, api_key, meta, cache_key),
+            daemon=True,
+        )
+        worker.start()
+        return initial_payload
+
+    if not refresh:
+        cached = _cache_get(cache_key)
+        if cached:
+            return cached
+    with _missing_episode_stats_lock:
+        if _missing_episode_stats_state.get("cache_key") == cache_key and _missing_episode_stats_state.get("payload"):
+            return _missing_episode_stats_state["payload"]
+    return _build_missing_episode_progress_payload(entries, meta, running=False, message="点击开始统计")
 
 
 @router.get("/tv/{tmdb_id}/season/{season_num}")

@@ -823,7 +823,7 @@ class EmbyClient:
             return res.get('TotalRecordCount', 0)
         except: return 0
 
-    def get_all_library_items(self, item_types="Movie,Series"):
+    def get_all_library_items(self, item_types="Movie,Series", library_id=None, library_name=""):
         """全量扫描媒体库，返回 { "tmdb_id:type": True } dict"""
         uid = self._get_user_id()
         endpoint = f"emby/Users/{uid}/Items" if uid else "emby/Items"
@@ -838,6 +838,8 @@ class EmbyClient:
                 "StartIndex": start,
                 "Limit": limit,
             }
+            if library_id:
+                params["ParentId"] = library_id
             try:
                 data = self._request("GET", endpoint, params=params)
             except Exception as e:
@@ -853,13 +855,18 @@ class EmbyClient:
                     continue
                 emby_type = item.get("Type", "")
                 media_type = "tv" if emby_type == "Series" else "movie"
-                results[f"{tmdb_id}:{media_type}"] = {
+                result_key = f"{tmdb_id}:{media_type}"
+                if library_id:
+                    result_key = f"{result_key}:{library_id}"
+                results[result_key] = {
                     "emby_id": item.get("Id", "") or "",
                     "tmdb_id": str(tmdb_id),
                     "media_type": media_type,
                     "title": item.get("Name", "") or "",
                     "original_title": item.get("OriginalTitle", "") or "",
                     "year": str(item.get("ProductionYear", "") or ""),
+                    "library_id": str(library_id or ""),
+                    "library_name": str(library_name or ""),
                 }
             total = data.get("TotalRecordCount", 0)
             start += limit

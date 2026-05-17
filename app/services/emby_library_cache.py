@@ -25,7 +25,7 @@ _server_idx = 0
 _level = "level1"
 
 # Emby 可用性索引：整部媒体、标题映射、剧集季/集状态
-DISCOVER_INDEX_VERSION = 1
+DISCOVER_INDEX_VERSION = 2
 DISCOVER_INDEX_TTL_SECONDS = 24 * 60 * 60
 DISCOVER_INDEX_MIN_REFRESH_INTERVAL = 5 * 60
 _discover_index: dict[str, str] = {}
@@ -899,7 +899,39 @@ def get_discover_item(tmdb_id: str | int | None, media_type: str) -> dict | None
     key = f"{str(tmdb_id or '').strip()}:{media_type}"
     with _discover_index_lock:
         item = _discover_items.get(key)
+        if not isinstance(item, dict):
+            prefix = f"{key}:"
+            item = next((value for item_key, value in _discover_items.items() if item_key.startswith(prefix) and isinstance(value, dict)), None)
         return dict(item) if isinstance(item, dict) else None
+
+
+def get_discover_series_entries() -> list[dict]:
+    with _discover_index_lock:
+        entries = []
+        for key, item in _discover_items.items():
+            parts = key.split(":")
+            if len(parts) < 2 or parts[1] != "tv" or not isinstance(item, dict):
+                continue
+            tmdb_id = parts[0]
+            seasons = _discover_series_index.get(key) or _discover_series_index.get(tmdb_id, {})
+            normalized_seasons = {}
+            for season, episodes in (seasons or {}).items():
+                try:
+                    normalized_seasons[str(int(season))] = sorted({int(ep) for ep in episodes})
+                except Exception:
+                    continue
+            entries.append({
+                "tmdb_id": str(tmdb_id),
+                "emby_id": item.get("emby_id", ""),
+                "title": item.get("title", ""),
+                "original_title": item.get("original_title", ""),
+                "year": item.get("year", ""),
+                "library_id": item.get("library_id", ""),
+                "library_name": item.get("library_name", "") or "未分类媒体库",
+                "media_type": "tv",
+                "seasons": normalized_seasons,
+            })
+        return entries
 
 
 def schedule_discover_index_refresh(server_idx: int = 0, reason: str = "manual", delay_sec: float = 30, force: bool = False) -> None:
@@ -948,7 +980,27 @@ def build_discover_index(server_idx: int = 0, reason: str = "manual", force: boo
         client = _create_client(server_idx)
         if not client:
             return
-        items = client.get_all_library_items()
+        libraries = _collect_server_libraries(client)
+        items = {}
+        tv_library_count = 0
+        for lib in libraries:
+            lib_id = lib.get("id")
+            lib_name = lib.get("name", "")
+            lib_type = str(lib.get("type", "") or "").lower()
+            if not lib_id:
+                continue
+            if lib_type and lib_type not in {"tvshows", "mixed", "unknown"}:
+                continue
+            library_items = client.get_all_library_items(
+                item_types="Series",
+                library_id=lib_id,
+                library_name=lib_name,
+            )
+            if library_items:
+                tv_library_count += 1
+                items.update(library_items)
+        if not items:
+            items = client.get_all_library_items()
         index: dict[str, str] = {}
         series_index: dict[str, dict[int, set[int]]] = {}
         discover_items: dict[str, dict] = {}
@@ -961,7 +1013,9 @@ def build_discover_index(server_idx: int = 0, reason: str = "manual", force: boo
             year = str(meta.get("year", "") or "")
             if not tmdb_id:
                 continue
-            discover_items[f"{tmdb_id}:{media_type}"] = dict(meta)
+            library_id = str(meta.get("library_id") or "")
+            discover_key = f"{tmdb_id}:{media_type}:{library_id}" if library_id else f"{tmdb_id}:{media_type}"
+            discover_items[discover_key] = dict(meta)
             index[f"tmdb:{tmdb_id}:{media_type}"] = tmdb_id
             for field in ("title", "original_title"):
                 norm = _normalize_for_discover(meta.get(field, "") or "")
@@ -972,7 +1026,9 @@ def build_discover_index(server_idx: int = 0, reason: str = "manual", force: boo
                 index.setdefault(f"title:{norm}:{media_type}", tmdb_id)
             if media_type == "tv":
                 try:
-                    series_index[tmdb_id] = client.get_series_episode_counts_by_id(meta.get("emby_id"))
+                    episode_counts = client.get_series_episode_counts_by_id(meta.get("emby_id"))
+                    series_index[discover_key] = episode_counts
+                    series_index.setdefault(tmdb_id, episode_counts)
                 except Exception as e:
                     series_error_count += 1
                     logger.debug(f"[EmbyLibCache] 剧集季集索引构建失败 TMDB:{tmdb_id}: {e}")
@@ -984,6 +1040,7 @@ def build_discover_index(server_idx: int = 0, reason: str = "manual", force: boo
             "item_count": len(discover_items),
             "index_key_count": len(index),
             "series_count": len(series_index),
+            "tv_library_count": tv_library_count,
             "series_error_count": series_error_count,
             "build_duration_sec": round(time.time() - start_time, 3),
             "reason": reason,

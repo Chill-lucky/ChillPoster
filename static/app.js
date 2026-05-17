@@ -89,6 +89,7 @@ createApp({
         // Dock 主栏图标 (11 个高频功能)
         const dockItems = [
             { id: 'media_subscribe', icon: 'fa-compass', label: '发现推荐', group: '网盘一条龙' },
+            { id: 'missing_episode_stats', icon: 'fa-list-check', label: '缺集统计', group: '网盘一条龙' },
         ];
 
         const storageItems = [
@@ -153,6 +154,7 @@ createApp({
             'drive115_upload',
             'webhook',
             'media_subscribe',
+            'missing_episode_stats',
             'resource_transfer',
             'media_organize',
             'media_organize_rules',
@@ -665,13 +667,9 @@ createApp({
         const dashboardRecentItems = ref([]);
         const dashboardRecentPlaybacks = ref([]);
         const dashboardMediaStats = reactive({ total: 0, movie_count: 0, series_count: 0, episode_count: 0, user_count: 0, movie_libraries: 0, series_libraries: 0, other_libraries: 0, libraries: [] });
-        const DASHBOARD_DEVICE_POLL_INTERVAL = 2000;
-        const DASHBOARD_DEVICE_HISTORY_LIMIT = 40;
-        const DASHBOARD_SPARKLINE_VIEWBOX = '0 0 100 30';
-        const DASHBOARD_SPARKLINE_WIDTH = 100;
-        const DASHBOARD_SPARKLINE_TOP = 3;
-        const DASHBOARD_SPARKLINE_BOTTOM = 20;
-        const DASHBOARD_SPARKLINE_BASELINE = 26;
+        const DASHBOARD_DEVICE_POLL_INTERVAL = 1000;
+        const DASHBOARD_DEVICE_HISTORY_LIMIT = 72;
+        const DASHBOARD_DEVICE_HISTORY_WINDOW_MS = 28000;
         const dashboardDeviceMetrics = reactive({
             cpu: { percent: 0 },
             memory: { percent: 0, used_gb: 0, total_gb: 0 },
@@ -759,6 +757,7 @@ createApp({
 
         let pollInterval = null;
         let dashboardDeviceMetricsPolling = null;
+        let dashboardDeviceMetricsAnimationFrame = null;
         let dashboard115Polling = null;
 
         const persistTaskLogs = () => {
@@ -896,9 +895,16 @@ createApp({
             isFirstPoll = true;
         };
 
-        const pushDashboardMetricSample = (queue, value) => {
+        const pushDashboardMetricSample = (queue, value, sampledAt = Date.now()) => {
             const nextValue = Number(value);
-            queue.push(Number.isFinite(nextValue) ? nextValue : 0);
+            queue.push({
+                t: sampledAt,
+                value: Number.isFinite(nextValue) ? nextValue : 0,
+            });
+            const cutoff = sampledAt - DASHBOARD_DEVICE_HISTORY_WINDOW_MS - DASHBOARD_DEVICE_POLL_INTERVAL * 2;
+            while (queue.length > 0 && Number(queue[0]?.t || 0) < cutoff) {
+                queue.shift();
+            }
             while (queue.length > DASHBOARD_DEVICE_HISTORY_LIMIT) {
                 queue.shift();
             }
@@ -909,12 +915,13 @@ createApp({
         };
 
         const recordDashboardDeviceMetricHistory = () => {
-            pushDashboardMetricSample(dashboardDeviceMetricHistory.cpuPercent, dashboardDeviceMetrics.cpu.percent);
-            pushDashboardMetricSample(dashboardDeviceMetricHistory.memoryPercent, dashboardDeviceMetrics.memory.percent);
-            pushDashboardMetricSample(dashboardDeviceMetricHistory.uploadBytes, dashboardDeviceMetrics.network.up_bytes_per_sec);
-            pushDashboardMetricSample(dashboardDeviceMetricHistory.downloadBytes, dashboardDeviceMetrics.network.down_bytes_per_sec);
-            pushDashboardMetricSample(dashboardDeviceMetricHistory.diskReadBytes, dashboardDeviceMetrics.disk.read_bytes_per_sec);
-            pushDashboardMetricSample(dashboardDeviceMetricHistory.diskWriteBytes, dashboardDeviceMetrics.disk.write_bytes_per_sec);
+            const now = Date.now();
+            pushDashboardMetricSample(dashboardDeviceMetricHistory.cpuPercent, dashboardDeviceMetrics.cpu.percent, now);
+            pushDashboardMetricSample(dashboardDeviceMetricHistory.memoryPercent, dashboardDeviceMetrics.memory.percent, now);
+            pushDashboardMetricSample(dashboardDeviceMetricHistory.uploadBytes, dashboardDeviceMetrics.network.up_bytes_per_sec, now);
+            pushDashboardMetricSample(dashboardDeviceMetricHistory.downloadBytes, dashboardDeviceMetrics.network.down_bytes_per_sec, now);
+            pushDashboardMetricSample(dashboardDeviceMetricHistory.diskReadBytes, dashboardDeviceMetrics.disk.read_bytes_per_sec, now);
+            pushDashboardMetricSample(dashboardDeviceMetricHistory.diskWriteBytes, dashboardDeviceMetrics.disk.write_bytes_per_sec, now);
         };
 
         const resetDashboardDeviceMetrics = () => {
@@ -926,6 +933,7 @@ createApp({
                 timestamp: null,
             });
             resetDashboardDeviceMetricHistory();
+            dashboardMetricCanvasState.clear();
         };
 
         const fetchDashboardDeviceMetrics = async () => {
@@ -946,7 +954,7 @@ createApp({
                 });
                 setTimeout(() => {
                     dashboardDeviceMetricsPulse.value = false;
-                }, 380);
+                }, 520);
             } catch (e) {
                 console.log('Dashboard device metrics failed', e);
                 dashboardDeviceMetricsLoaded.value = false;
@@ -1008,16 +1016,265 @@ createApp({
             }
         };
 
+        const dashboardMetricPaletteMap = {
+            cpu: { lineStart: '#4caeb5', lineEnd: '#5f8fdd', fillStart: '#4caeb5', fillEnd: '#5f8fdd' },
+            memory: { lineStart: '#6d9de0', lineEnd: '#7f8fe6', fillStart: '#6d9de0', fillEnd: '#7f8fe6' },
+            upload: { lineStart: '#56c2b1', lineEnd: '#5caecb', fillStart: '#56c2b1', fillEnd: '#5caecb' },
+            download: { lineStart: '#5c9fe0', lineEnd: '#4f83dc', fillStart: '#5c9fe0', fillEnd: '#4f83dc' },
+            'disk-read': { lineStart: '#74acd8', lineEnd: '#6d96d8', fillStart: '#74acd8', fillEnd: '#6d96d8' },
+            'disk-write': { lineStart: '#4fb3ca', lineEnd: '#5a8fd2', fillStart: '#4fb3ca', fillEnd: '#5a8fd2' },
+        };
+        const dashboardMetricCanvasState = new Map();
+
+        const hexToRgba = (hex, alpha = 1) => {
+            const normalized = String(hex || '').replace('#', '');
+            if (normalized.length !== 6) return `rgba(95, 143, 221, ${alpha})`;
+            const value = Number.parseInt(normalized, 16);
+            const r = (value >> 16) & 255;
+            const g = (value >> 8) & 255;
+            const b = value & 255;
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        };
+
+        const getDashboardMetricCanvasConfig = (key) => {
+            const map = {
+                cpu: { key: 'cpu', history: dashboardDeviceMetricHistory.cpuPercent, mode: 'percent', tone: 'cpu' },
+                memory: { key: 'memory', history: dashboardDeviceMetricHistory.memoryPercent, mode: 'percent', tone: 'memory' },
+                upload: { key: 'upload', history: dashboardDeviceMetricHistory.uploadBytes, mode: 'throughput', tone: 'upload' },
+                download: { key: 'download', history: dashboardDeviceMetricHistory.downloadBytes, mode: 'throughput', tone: 'download' },
+                'disk-read': { key: 'disk-read', history: dashboardDeviceMetricHistory.diskReadBytes, mode: 'throughput', tone: 'disk-read' },
+                'disk-write': { key: 'disk-write', history: dashboardDeviceMetricHistory.diskWriteBytes, mode: 'throughput', tone: 'disk-write' },
+            };
+            return map[key] || map.cpu;
+        };
+
+        const normalizeCanvasSamples = (history, now) => {
+            const samples = Array.isArray(history)
+                ? history
+                    .map((sample) => {
+                        if (sample && typeof sample === 'object') {
+                            const value = Number(sample.value);
+                            const t = Number(sample.t);
+                            return {
+                                t: Number.isFinite(t) ? t : now,
+                                value: Number.isFinite(value) ? value : 0,
+                            };
+                        }
+                        const value = Number(sample);
+                        return { t: now, value: Number.isFinite(value) ? value : 0 };
+                    })
+                    .filter((sample) => Number.isFinite(sample.t) && Number.isFinite(sample.value))
+                    .sort((a, b) => a.t - b.t)
+                : [];
+            if (samples.length === 0) {
+                return [{ t: now - DASHBOARD_DEVICE_HISTORY_WINDOW_MS, value: 0 }, { t: now, value: 0 }];
+            }
+            if (samples.length === 1) {
+                return [{ t: now - DASHBOARD_DEVICE_HISTORY_WINDOW_MS, value: samples[0].value }, samples[0]];
+            }
+            return samples;
+        };
+
+        const getCanvasMetricScale = (samples, mode) => {
+            const values = samples.map((sample) => sample.value);
+            const rawMin = Math.min(...values);
+            const rawMax = Math.max(...values, mode === 'throughput' ? 1 : 0);
+            if (mode === 'percent') {
+                const rawRange = Math.max(rawMax - rawMin, 0);
+                const visibleRange = Math.min(100, Math.max(rawRange * 1.35, 14));
+                const center = (rawMin + rawMax) / 2;
+                let min = Math.max(0, center - visibleRange / 2);
+                let max = Math.min(100, center + visibleRange / 2);
+                if (max - min < visibleRange) {
+                    if (min <= 0) max = Math.min(100, min + visibleRange);
+                    if (max >= 100) min = Math.max(0, max - visibleRange);
+                }
+                return { min, max: max > min ? max : min + 1 };
+            }
+            const max = Math.max(rawMax * 1.18, 1);
+            return { min: 0, max };
+        };
+
+        const getDashboardMetricVisualState = (config, targetValue, targetScale) => {
+            const stateKey = config.key || config.tone || 'cpu';
+            let state = dashboardMetricCanvasState.get(stateKey);
+            if (!state) {
+                state = {
+                    displayValue: targetValue,
+                    scaleMin: targetScale.min,
+                    scaleMax: targetScale.max,
+                };
+                dashboardMetricCanvasState.set(stateKey, state);
+            }
+            state.displayValue += (targetValue - state.displayValue) * 0.12;
+            const minEase = targetScale.min < state.scaleMin ? 0.12 : 0.035;
+            const maxEase = targetScale.max > state.scaleMax ? 0.18 : 0.04;
+            state.scaleMin += (targetScale.min - state.scaleMin) * minEase;
+            state.scaleMax += (targetScale.max - state.scaleMax) * maxEase;
+            if (state.scaleMax - state.scaleMin < 1) {
+                state.scaleMax = state.scaleMin + 1;
+            }
+            return state;
+        };
+
+        const traceCanvasMetricCurve = (ctx, points) => {
+            if (!points.length) return;
+            ctx.moveTo(points[0].x, points[0].y);
+            if (points.length === 1) return;
+            if (points.length === 2) {
+                ctx.lineTo(points[1].x, points[1].y);
+                return;
+            }
+            for (let index = 1; index < points.length - 1; index += 1) {
+                const currentPoint = points[index];
+                const nextPoint = points[index + 1];
+                const midX = (currentPoint.x + nextPoint.x) / 2;
+                const midY = (currentPoint.y + nextPoint.y) / 2;
+                ctx.quadraticCurveTo(currentPoint.x, currentPoint.y, midX, midY);
+            }
+            const lastPoint = points[points.length - 1];
+            ctx.lineTo(lastPoint.x, lastPoint.y);
+        };
+
+        const drawDashboardMetricCanvas = (canvas, config, now) => {
+            const rect = canvas.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return false;
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const targetWidth = Math.max(1, Math.round(rect.width * dpr));
+            const targetHeight = Math.max(1, Math.round(rect.height * dpr));
+            if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+                canvas.width = targetWidth;
+                canvas.height = targetHeight;
+            }
+
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return false;
+            const width = rect.width;
+            const height = rect.height;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, width, height);
+
+            const samples = normalizeCanvasSamples(config.history, now);
+            const windowStart = now - DASHBOARD_DEVICE_HISTORY_WINDOW_MS;
+            const beforeWindow = [...samples].reverse().find((sample) => sample.t < windowStart);
+            const rawVisibleSamples = samples.filter((sample) => sample.t >= windowStart && sample.t <= now + DASHBOARD_DEVICE_POLL_INTERVAL);
+            if (beforeWindow) {
+                rawVisibleSamples.unshift({ t: windowStart, value: beforeWindow.value });
+            }
+            if (rawVisibleSamples.length === 0) {
+                rawVisibleSamples.push({ t: windowStart, value: samples[0].value }, { t: now, value: samples[samples.length - 1].value });
+            }
+
+            const latestSample = samples[samples.length - 1];
+            const targetScale = getCanvasMetricScale(rawVisibleSamples, config.mode);
+            const visualState = getDashboardMetricVisualState(config, latestSample.value, targetScale);
+            const scale = { min: visualState.scaleMin, max: visualState.scaleMax };
+            const visibleSamples = rawVisibleSamples
+                .filter((sample) => sample !== latestSample && sample.t < latestSample.t)
+                .concat({
+                    t: Math.max(windowStart, Math.min(latestSample.t, now)),
+                    value: visualState.displayValue,
+                });
+            const lastVisibleSample = visibleSamples[visibleSamples.length - 1];
+            if (!lastVisibleSample || now - lastVisibleSample.t > 12) {
+                visibleSamples.push({ t: now, value: visualState.displayValue });
+            }
+
+            const topPadding = 4;
+            const bottomPadding = 6;
+            const chartHeight = Math.max(1, height - topPadding - bottomPadding);
+            const yForValue = (value) => {
+                const ratio = Math.max(0, Math.min(1, (value - scale.min) / (scale.max - scale.min || 1)));
+                return topPadding + (1 - ratio) * chartHeight;
+            };
+            const xForTime = (t) => ((t - windowStart) / DASHBOARD_DEVICE_HISTORY_WINDOW_MS) * width;
+            let points = visibleSamples.map((sample) => ({
+                x: xForTime(sample.t),
+                y: yForValue(sample.value),
+            })).filter((point) => point.x >= -width * 0.08 && point.x <= width * 1.08);
+
+            if (points.length === 0) {
+                const y = yForValue(0);
+                points = [{ x: 0, y }, { x: width, y }];
+            }
+            if (points[0].x > 0) {
+                points.unshift({ x: 0, y: points[0].y });
+            }
+            const latestPoint = points[points.length - 1];
+            if (latestPoint.x < width) {
+                points.push({ x: width, y: latestPoint.y });
+            }
+
+            const palette = dashboardMetricPaletteMap[config.tone] || dashboardMetricPaletteMap.cpu;
+            const lineGradient = ctx.createLinearGradient(0, 0, width, 0);
+            lineGradient.addColorStop(0, palette.lineStart);
+            lineGradient.addColorStop(1, palette.lineEnd);
+            const fillGradient = ctx.createLinearGradient(0, topPadding, 0, height);
+            fillGradient.addColorStop(0, hexToRgba(palette.fillStart, 0.24));
+            fillGradient.addColorStop(0.72, hexToRgba(palette.fillEnd, 0.07));
+            fillGradient.addColorStop(1, hexToRgba(palette.fillEnd, 0));
+
+            ctx.save();
+            ctx.beginPath();
+            traceCanvasMetricCurve(ctx, points);
+            ctx.lineTo(width, height + 2);
+            ctx.lineTo(0, height + 2);
+            ctx.closePath();
+            ctx.fillStyle = fillGradient;
+            ctx.fill();
+
+            ctx.beginPath();
+            traceCanvasMetricCurve(ctx, points);
+            ctx.lineWidth = 1.65;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.strokeStyle = lineGradient;
+            ctx.shadowColor = hexToRgba(palette.lineEnd, 0.28);
+            ctx.shadowBlur = 7;
+            ctx.stroke();
+
+            ctx.restore();
+            return true;
+        };
+
+        const drawDashboardDeviceMetricCanvases = () => {
+            if (tab.value !== 'dashboard') return;
+            const canvases = document.querySelectorAll('.metric-sub-card-sparkline-canvas');
+            if (!canvases.length) return;
+            const now = Date.now();
+            canvases.forEach((canvas) => {
+                drawDashboardMetricCanvas(canvas, getDashboardMetricCanvasConfig(canvas.dataset.metricKey), now);
+            });
+        };
+
         const stopDashboardDeviceMetricsPolling = () => {
             if (dashboardDeviceMetricsPolling) {
                 clearInterval(dashboardDeviceMetricsPolling);
                 dashboardDeviceMetricsPolling = null;
             }
+            if (dashboardDeviceMetricsAnimationFrame) {
+                cancelAnimationFrame(dashboardDeviceMetricsAnimationFrame);
+                dashboardDeviceMetricsAnimationFrame = null;
+            }
+        };
+
+        const startDashboardDeviceMetricsAnimation = () => {
+            if (dashboardDeviceMetricsAnimationFrame) return;
+            const tick = () => {
+                if (tab.value !== 'dashboard') {
+                    dashboardDeviceMetricsAnimationFrame = null;
+                    return;
+                }
+                drawDashboardDeviceMetricCanvases();
+                dashboardDeviceMetricsAnimationFrame = requestAnimationFrame(tick);
+            };
+            dashboardDeviceMetricsAnimationFrame = requestAnimationFrame(tick);
         };
 
         const startDashboardDeviceMetricsPolling = () => {
             stopDashboardDeviceMetricsPolling();
             if (tab.value !== 'dashboard') return;
+            startDashboardDeviceMetricsAnimation();
             fetchDashboardDeviceMetrics();
             dashboardDeviceMetricsPolling = setInterval(() => {
                 if (tab.value !== 'dashboard') return;
@@ -3924,6 +4181,7 @@ createApp({
                     loadMainGrid(true);
                 }
             }
+            if (val === 'missing_episode_stats') loadMissingEpisodeStatsShell();
             if (val === 'config_moviepilot') fetchMpConfig();
         });
 
@@ -4046,7 +4304,7 @@ createApp({
                 'server':'Emby 配置', 'fonts':'字体库', 'templates':'模板管理',
                 'library_preview':'封面备份', 'translations':'翻译配置', 'account':'账户管理',
                 'upgrade': '系统升级',
-                'media_subscribe': '发现推荐', 'resource_transfer': '资源转存',
+                'media_subscribe': '发现推荐', 'missing_episode_stats': '缺集统计', 'resource_transfer': '资源转存',
                 'media_organize': '媒体整理', 'media_organize_rules': '二级分类规则', 'strm_generate': 'STRM 生成',
                 'drive115_cleanup': '115 定时清空',
                 'drive115_upload': '115 秒传/上传',
@@ -4167,7 +4425,7 @@ createApp({
             loadDiscoverSources().then(() => {
                 if (tab.value === 'media_subscribe' && !mainGridItems.value.length) loadMainGrid(true);
             });
-
+            if (tab.value === 'missing_episode_stats') loadMissingEpisodeStatsShell();
             try {
                 const res = await axios.get('/api/load');
                 if (res.data) {
@@ -4452,138 +4710,6 @@ createApp({
             return { main: raw, unit: '', split: false };
         };
 
-        const padSparklineHistory = (samples, targetLength = DASHBOARD_DEVICE_HISTORY_LIMIT) => {
-            const safeSamples = Array.isArray(samples)
-                ? samples.map((value) => {
-                    const numeric = Number(value);
-                    return Number.isFinite(numeric) ? numeric : 0;
-                })
-                : [];
-            if (safeSamples.length >= targetLength) {
-                return safeSamples.slice(-targetLength);
-            }
-            const firstValue = safeSamples.length > 0 ? safeSamples[0] : 0;
-            return Array(targetLength - safeSamples.length).fill(firstValue).concat(safeSamples);
-        };
-
-        const buildSparklinePoints = (samples, options = {}) => {
-            const width = options.width || DASHBOARD_SPARKLINE_WIDTH;
-            const top = options.top ?? DASHBOARD_SPARKLINE_TOP;
-            const bottom = options.bottom ?? DASHBOARD_SPARKLINE_BOTTOM;
-            const paddingX = options.paddingX ?? 0;
-            const mode = options.mode || 'throughput';
-            const paddedSamples = padSparklineHistory(samples);
-            let minValue = 0;
-            let maxValue = 100;
-            if (mode === 'percent') {
-                minValue = 0;
-                maxValue = 100;
-            } else {
-                const rawMin = Math.min(...paddedSamples);
-                const rawMax = Math.max(...paddedSamples, 1);
-                const rawRange = Math.max(rawMax - rawMin, Math.max(Math.abs(rawMax) * 0.16, 1));
-                const verticalPadding = Math.max(rawRange * 0.18, 1);
-                minValue = rawMin - verticalPadding;
-                maxValue = rawMax + verticalPadding * 0.45;
-            }
-            if (!Number.isFinite(minValue)) minValue = 0;
-            if (!Number.isFinite(maxValue)) maxValue = mode === 'percent' ? 100 : 1;
-            if (maxValue <= minValue) {
-                maxValue = minValue + (mode === 'percent' ? 1 : Math.max(1, Math.abs(minValue) * 0.1));
-            }
-            const range = maxValue - minValue;
-            const stepX = paddedSamples.length > 1 ? (width - paddingX * 2) / (paddedSamples.length - 1) : 0;
-            return paddedSamples.map((value, index) => {
-                const ratio = Math.max(0, Math.min(1, (value - minValue) / range));
-                const x = paddingX + stepX * index;
-                const y = bottom - ratio * (bottom - top);
-                return {
-                    x: Number(x.toFixed(2)),
-                    y: Number(y.toFixed(2)),
-                };
-            });
-        };
-
-        const buildSmoothSparklinePath = (points) => {
-            if (!Array.isArray(points) || points.length === 0) return '';
-            if (points.length === 1) {
-                return `M ${points[0].x} ${points[0].y}`;
-            }
-            if (points.length === 2) {
-                return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
-            }
-            let path = `M ${points[0].x} ${points[0].y}`;
-            for (let index = 1; index < points.length - 1; index += 1) {
-                const nextPoint = points[index + 1];
-                const controlPoint = points[index];
-                const midX = Number(((controlPoint.x + nextPoint.x) / 2).toFixed(2));
-                const midY = Number(((controlPoint.y + nextPoint.y) / 2).toFixed(2));
-                path += ` Q ${controlPoint.x} ${controlPoint.y} ${midX} ${midY}`;
-            }
-            const lastPoint = points[points.length - 1];
-            path += ` T ${lastPoint.x} ${lastPoint.y}`;
-            return path;
-        };
-
-        const buildSparklineAreaPath = (points, linePath, baselineY = DASHBOARD_SPARKLINE_BASELINE) => {
-            if (!Array.isArray(points) || points.length === 0 || !linePath) return '';
-            const firstPoint = points[0];
-            const lastPoint = points[points.length - 1];
-            return `${linePath} L ${lastPoint.x} ${baselineY} L ${firstPoint.x} ${baselineY} Z`;
-        };
-
-        const getMetricSparkline = (history, mode = 'throughput', key = 'metric', tone = 'cpu') => {
-            const points = buildSparklinePoints(history, { mode });
-            const linePath = buildSmoothSparklinePath(points);
-            const tonePaletteMap = {
-                cpu: {
-                    lineStart: '#4caeb5',
-                    lineEnd: '#5f8fdd',
-                    fillStart: '#4caeb5',
-                    fillEnd: '#5f8fdd',
-                },
-                memory: {
-                    lineStart: '#6d9de0',
-                    lineEnd: '#7f8fe6',
-                    fillStart: '#6d9de0',
-                    fillEnd: '#7f8fe6',
-                },
-                upload: {
-                    lineStart: '#56c2b1',
-                    lineEnd: '#5caecb',
-                    fillStart: '#56c2b1',
-                    fillEnd: '#5caecb',
-                },
-                download: {
-                    lineStart: '#5c9fe0',
-                    lineEnd: '#4f83dc',
-                    fillStart: '#5c9fe0',
-                    fillEnd: '#4f83dc',
-                },
-                'disk-read': {
-                    lineStart: '#74acd8',
-                    lineEnd: '#6d96d8',
-                    fillStart: '#74acd8',
-                    fillEnd: '#6d96d8',
-                },
-                'disk-write': {
-                    lineStart: '#4fb3ca',
-                    lineEnd: '#5a8fd2',
-                    fillStart: '#4fb3ca',
-                    fillEnd: '#5a8fd2',
-                },
-            };
-            return {
-                viewBox: DASHBOARD_SPARKLINE_VIEWBOX,
-                linePath,
-                areaPath: buildSparklineAreaPath(points, linePath),
-                lineGradientId: `metric-sparkline-line-${key}`,
-                fillGradientId: `metric-sparkline-fill-${key}`,
-                palette: tonePaletteMap[tone] || tonePaletteMap.cpu,
-                hasData: Array.isArray(history) && history.length > 0,
-            };
-        };
-
         const dashboardVisibleRecentItems = computed(() => {
             if (!isMobile.value) return dashboardRecentItems.value;
             return dashboardRecentItems.value.slice(0, 100);
@@ -4606,7 +4732,6 @@ createApp({
                     valueText: cpuValueText,
                     valueDisplay: splitMetricDisplay(cpuValueText),
                     subText: '',
-                    sparkline: getMetricSparkline(dashboardDeviceMetricHistory.cpuPercent, 'percent', 'cpu', 'cpu'),
                 },
                 {
                     key: 'memory',
@@ -4617,7 +4742,6 @@ createApp({
                     valueText: memoryValueText,
                     valueDisplay: splitMetricDisplay(memoryValueText),
                     subText: formatDeviceMemory(dashboardDeviceMetrics.memory.used_gb, dashboardDeviceMetrics.memory.total_gb),
-                    sparkline: getMetricSparkline(dashboardDeviceMetricHistory.memoryPercent, 'percent', 'memory', 'memory'),
                 },
                 {
                     key: 'upload',
@@ -4628,7 +4752,6 @@ createApp({
                     valueText: uploadValueText,
                     valueDisplay: splitMetricDisplay(uploadValueText),
                     subText: '',
-                    sparkline: getMetricSparkline(dashboardDeviceMetricHistory.uploadBytes, 'throughput', 'upload', 'upload'),
                 },
                 {
                     key: 'download',
@@ -4639,7 +4762,6 @@ createApp({
                     valueText: downloadValueText,
                     valueDisplay: splitMetricDisplay(downloadValueText),
                     subText: '',
-                    sparkline: getMetricSparkline(dashboardDeviceMetricHistory.downloadBytes, 'throughput', 'download', 'download'),
                 },
                 {
                     key: 'disk-read',
@@ -4650,7 +4772,6 @@ createApp({
                     valueText: diskReadValueText,
                     valueDisplay: splitMetricDisplay(diskReadValueText),
                     subText: '',
-                    sparkline: getMetricSparkline(dashboardDeviceMetricHistory.diskReadBytes, 'throughput', 'disk-read', 'disk-read'),
                 },
                 {
                     key: 'disk-write',
@@ -4661,7 +4782,6 @@ createApp({
                     valueText: diskWriteValueText,
                     valueDisplay: splitMetricDisplay(diskWriteValueText),
                     subText: '',
-                    sparkline: getMetricSparkline(dashboardDeviceMetricHistory.diskWriteBytes, 'throughput', 'disk-write', 'disk-write'),
                 },
             ];
         });
@@ -6341,11 +6461,110 @@ createApp({
         let _mainGridGen = 0;
         const mainGridPrefetch = reactive({ pages: {} });
         const MAIN_GRID_PREFETCH_AHEAD = 2;
+        const emptyMissingEpisodeSummary = () => ({
+            tvCount: 0,
+            completeCount: 0,
+            partialCount: 0,
+            missingCount: 0,
+            errorCount: 0,
+            airingRecentMissingCount: 0,
+            endedMissingCount: 0,
+            otherMissingCount: 0,
+            presentEpisodes: 0,
+            totalEpisodes: 0,
+            missingEpisodes: 0,
+        });
+        const missingEpisodeStats = reactive({
+            loading: false,
+            loaded: false,
+            ready: true,
+            error: '',
+            message: '',
+            items: [],
+            libraries: [],
+            activeLibraryKey: '',
+            filter: 'all',
+            statusFilter: 'all',
+            sortBy: 'year_desc',
+            searchQuery: '',
+            meta: {},
+            summary: emptyMissingEpisodeSummary(),
+            progress: { current: 0, total: 0 },
+        });
+        let missingEpisodeStatsRunId = 0;
+        let missingEpisodeStatsPollTimer = null;
+        const getMissingEpisodeLibraryKey = (lib = {}) => lib.libraryId || lib.libraryName || '';
+        const missingEpisodeLibraries = computed(() => missingEpisodeStats.libraries || []);
+        const missingEpisodeActiveLibrary = computed(() => {
+            const libraries = missingEpisodeLibraries.value;
+            if (!libraries.length) return null;
+            return libraries.find(lib => getMissingEpisodeLibraryKey(lib) === missingEpisodeStats.activeLibraryKey) || libraries[0];
+        });
+        const missingEpisodeActiveSummary = computed(() => {
+            return missingEpisodeActiveLibrary.value?.summary || missingEpisodeStats.summary || emptyMissingEpisodeSummary();
+        });
+        const missingEpisodeSearchActive = computed(() => !!String(missingEpisodeStats.searchQuery || '').trim());
+        const missingEpisodeStatsProblemItems = computed(() => {
+            const query = String(missingEpisodeStats.searchQuery || '').trim().toLowerCase();
+            const sourceItems = query
+                ? (missingEpisodeStats.items || [])
+                : (missingEpisodeActiveLibrary.value?.items || missingEpisodeStats.items || []);
+            const filteredItems = sourceItems.filter(item => {
+                if (missingEpisodeStats.statusFilter === 'problem' && item.status !== 'partial') return false;
+                if (missingEpisodeStats.statusFilter !== 'all' && missingEpisodeStats.statusFilter !== 'problem' && item.status !== missingEpisodeStats.statusFilter) return false;
+                if (missingEpisodeStats.filter === 'all') return true;
+                return item.missingCategory === missingEpisodeStats.filter;
+            }).filter(item => {
+                if (!query) return true;
+                const haystack = [
+                    item.title,
+                    item.item?.original_title,
+                    item.year,
+                    item.tmdbId,
+                    item.label,
+                    item.categoryLabel,
+                    item.seasonBrief,
+                ].filter(Boolean).join(' ').toLowerCase();
+                return haystack.includes(query);
+            });
+            const num = (value) => Number(value) || 0;
+            const year = (item) => num(String(item.year || '').slice(0, 4));
+            const missingRatio = (item) => {
+                const total = num(item.totalEpisodes);
+                return total ? num(item.missingEpisodes) / total : 0;
+            };
+            const sortedItems = [...filteredItems];
+            sortedItems.sort((a, b) => {
+                switch (missingEpisodeStats.sortBy) {
+                    case 'year_desc':
+                        return year(b) - year(a) || num(b.missingEpisodes) - num(a.missingEpisodes);
+                    case 'year_asc':
+                        return year(a) - year(b) || num(b.missingEpisodes) - num(a.missingEpisodes);
+                    case 'missing_asc':
+                        return num(a.missingEpisodes) - num(b.missingEpisodes) || year(b) - year(a);
+                    case 'ratio_desc':
+                        return missingRatio(b) - missingRatio(a) || num(b.missingEpisodes) - num(a.missingEpisodes);
+                    case 'ratio_asc':
+                        return missingRatio(a) - missingRatio(b) || num(b.missingEpisodes) - num(a.missingEpisodes);
+                    case 'title_asc':
+                        return String(a.title || '').localeCompare(String(b.title || ''), 'zh-Hans-CN') || year(b) - year(a);
+                    case 'missing_desc':
+                    default:
+                        return num(b.missingEpisodes) - num(a.missingEpisodes) || year(b) - year(a);
+                }
+            });
+            return sortedItems;
+        });
 
         const isDoubanMainGrid = () => discoverActiveSource.value === 'douban';
 
         const resetMainGridPrefetch = () => {
             mainGridPrefetch.pages = {};
+        };
+
+        const clearMissingEpisodeStatsForGridChange = () => {
+            resetMissingEpisodeStats();
+            missingEpisodeStats.loading = false;
         };
 
         const getProviderFilterParams = () => {
@@ -6396,6 +6615,145 @@ createApp({
             } catch (e) {
                 console.error('检查媒体库存在状态失败:', e);
             }
+        };
+
+        const resetMissingEpisodeStats = () => {
+            missingEpisodeStatsRunId += 1;
+            if (missingEpisodeStatsPollTimer) {
+                clearTimeout(missingEpisodeStatsPollTimer);
+                missingEpisodeStatsPollTimer = null;
+            }
+            missingEpisodeStats.loaded = false;
+            missingEpisodeStats.ready = true;
+            missingEpisodeStats.error = '';
+            missingEpisodeStats.message = '';
+            missingEpisodeStats.items = [];
+            missingEpisodeStats.libraries = [];
+            missingEpisodeStats.activeLibraryKey = '';
+            missingEpisodeStats.filter = 'all';
+            missingEpisodeStats.statusFilter = 'all';
+            missingEpisodeStats.sortBy = 'year_desc';
+            missingEpisodeStats.searchQuery = '';
+            missingEpisodeStats.meta = {};
+            missingEpisodeStats.summary = emptyMissingEpisodeSummary();
+            missingEpisodeStats.progress = { current: 0, total: 0 };
+        };
+
+        const applyMissingEpisodeStatsData = (data = {}) => {
+            const previousLibraryKey = missingEpisodeStats.activeLibraryKey;
+            const summary = { ...emptyMissingEpisodeSummary(), ...(data.summary || {}) };
+            missingEpisodeStats.ready = data.ready !== false;
+            missingEpisodeStats.message = data.message || '';
+            missingEpisodeStats.meta = data.meta || {};
+            missingEpisodeStats.items = data.items || [];
+            missingEpisodeStats.libraries = data.libraries || [];
+            const stillExists = missingEpisodeStats.libraries.some(lib => getMissingEpisodeLibraryKey(lib) === previousLibraryKey);
+            if (stillExists) {
+                missingEpisodeStats.activeLibraryKey = previousLibraryKey;
+            } else {
+                const firstProblemLib = missingEpisodeStats.libraries.find(lib => (lib.summary?.missingEpisodes || 0) > 0);
+                const firstLib = firstProblemLib || missingEpisodeStats.libraries[0];
+                missingEpisodeStats.activeLibraryKey = firstLib ? getMissingEpisodeLibraryKey(firstLib) : '';
+            }
+            missingEpisodeStats.summary = summary;
+            missingEpisodeStats.progress = data.progress || { current: summary.tvCount || 0, total: summary.tvCount || 0 };
+            missingEpisodeStats.loaded = true;
+            missingEpisodeStats.loading = !!data.running;
+        };
+
+        const pollMissingEpisodeStats = async (runId) => {
+            try {
+                const res = await axios.get('/api/discover/library/missing-episode-stats');
+                if (runId !== missingEpisodeStatsRunId) return;
+                const data = res.data || {};
+                applyMissingEpisodeStatsData(data);
+                if (data.running) {
+                    missingEpisodeStatsPollTimer = setTimeout(() => pollMissingEpisodeStats(runId), 1200);
+                } else {
+                    missingEpisodeStatsPollTimer = null;
+                    missingEpisodeStats.loading = false;
+                }
+            } catch (e) {
+                if (runId === missingEpisodeStatsRunId) {
+                    missingEpisodeStats.loading = false;
+                    missingEpisodeStats.error = e.response?.data?.detail || e.message || '统计失败';
+                }
+            }
+        };
+
+        const loadMissingEpisodeStatsShell = async () => {
+            if (missingEpisodeStats.loading || missingEpisodeStats.loaded) return;
+            const runId = missingEpisodeStatsRunId;
+            try {
+                const res = await axios.get('/api/discover/library/missing-episode-stats');
+                if (runId !== missingEpisodeStatsRunId) return;
+                applyMissingEpisodeStatsData(res.data || {});
+                if (res.data?.running) {
+                    missingEpisodeStatsPollTimer = setTimeout(() => pollMissingEpisodeStats(runId), 1200);
+                }
+            } catch (e) {
+                if (runId === missingEpisodeStatsRunId) {
+                    missingEpisodeStats.error = e.response?.data?.detail || e.message || '获取媒体库失败';
+                }
+            }
+        };
+
+        const runMissingEpisodeStats = async (force = false) => {
+            if (missingEpisodeStats.loading) return;
+            if (missingEpisodeStats.loaded && !force) return;
+            resetMissingEpisodeStats();
+            const runId = missingEpisodeStatsRunId;
+            missingEpisodeStats.loading = true;
+            try {
+                const res = await axios.get('/api/discover/library/missing-episode-stats', {
+                    params: { start: 1, refresh: force ? 1 : 0 },
+                });
+                if (runId !== missingEpisodeStatsRunId) return;
+                applyMissingEpisodeStatsData(res.data || {});
+                if (res.data?.running) {
+                    missingEpisodeStatsPollTimer = setTimeout(() => pollMissingEpisodeStats(runId), 1200);
+                }
+            } catch (e) {
+                if (runId === missingEpisodeStatsRunId) {
+                    missingEpisodeStats.error = e.response?.data?.detail || e.message || '统计失败';
+                }
+            } finally {
+                if (runId === missingEpisodeStatsRunId && !missingEpisodeStatsPollTimer) {
+                    missingEpisodeStats.loading = false;
+                }
+            }
+        };
+
+        const refreshMissingEpisodeStats = () => {
+            runMissingEpisodeStats(true);
+        };
+
+        const setMissingEpisodeLibrary = (libraryKey) => {
+            missingEpisodeStats.activeLibraryKey = libraryKey;
+        };
+
+        const setMissingEpisodeFilter = (filter) => {
+            missingEpisodeStats.filter = filter || 'all';
+        };
+
+        const setMissingEpisodeStatusFilter = (filter) => {
+            missingEpisodeStats.statusFilter = filter || 'all';
+        };
+
+        const setMissingEpisodeSort = (sortBy) => {
+            missingEpisodeStats.sortBy = sortBy || 'year_desc';
+        };
+
+        const openDiscoverFromMissingStats = () => {
+            if (isMobile.value) {
+                tab.value = 'media_subscribe';
+                mobileMenuVisible.value = false;
+                return;
+            }
+            openPanels.value = ['media_subscribe'];
+            focusedPanel.value = 'media_subscribe';
+            tab.value = 'media_subscribe';
+            closeDockDrawers();
         };
 
         const applyLibraryStatusFilter = (items = []) => {
@@ -6580,6 +6938,7 @@ createApp({
             if (mainGridObserver) { mainGridObserver.disconnect(); mainGridObserver = null; }
             if (mainGridObserverRetryTimer) { clearTimeout(mainGridObserverRetryTimer); mainGridObserverRetryTimer = null; }
             resetMainGridPrefetch();
+            clearMissingEpisodeStatsForGridChange();
             mainGridItems.value = [];
             mainGridPage.value = 1;
             mainGridNoMore.value = false;
@@ -7289,6 +7648,8 @@ createApp({
 
             // [新增] 发现推荐页
             detailModal, openMediaDetail, closeDetailModal,
+            missingEpisodeStats, missingEpisodeLibraries, missingEpisodeActiveLibrary, missingEpisodeActiveSummary, missingEpisodeSearchActive, missingEpisodeStatsProblemItems,
+            runMissingEpisodeStats, refreshMissingEpisodeStats, setMissingEpisodeLibrary, setMissingEpisodeFilter, setMissingEpisodeStatusFilter, setMissingEpisodeSort, openDiscoverFromMissingStats,
             setDetailSeason, toggleDetailSeasonExpanded, loadSeasonEpisodes, getSeasonLibraryState, getDetailLibraryState, isEpisodeInLibrary,
             subscribeMedia, unsubscribeMedia, getImdbLink, getTvdbLink,
             gridModal, gridModalEl, gridSentinel, openRowGrid, closeGridModal,
