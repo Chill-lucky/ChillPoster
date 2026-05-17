@@ -95,6 +95,7 @@ _FFPROBE_FILE_CACHE_PATH = "config/media_organize_ffprobe_cache.json"
 _FFPROBE_BATCH_CACHE_PATH = "config/media_organize_ffprobe_batch_cache.json"
 _FFPROBE_BATCH_CACHE_TTL_SECONDS = 1800
 _FFPROBE_BATCH_SAMPLE_LIMIT = 3
+_FFPROBE_NAME_CONFLICT_REASONS = {"resolution_conflict", "codec_conflict"}
 _FFPROBE_PROFILE_FIELDS = (
     "resource_pix",
     "video_encode",
@@ -278,11 +279,12 @@ def _get_cached_ffprobe_batch_profile(batch_key: tuple) -> dict:
         return {}
     profile["ext"] = str((entry.get("profile") or {}).get("ext", "") or "")
     profile["sample_count"] = int((entry.get("profile") or {}).get("sample_count", 0) or 0)
+    profile["_ignored_name_conflicts"] = list(entry.get("ignored_name_conflicts") or [])
     return profile
 
 
 
-def _set_cached_ffprobe_batch_profile(batch_key: tuple, profile: dict) -> None:
+def _set_cached_ffprobe_batch_profile(batch_key: tuple, profile: dict, ignored_name_conflicts: list[str] | None = None) -> None:
     global _FFPROBE_BATCH_CACHE
     serialized_key = _serialize_ffprobe_batch_key(batch_key)
     normalized = _normalize_ffprobe_fields(profile)
@@ -294,6 +296,7 @@ def _set_cached_ffprobe_batch_profile(batch_key: tuple, profile: dict) -> None:
             "ext": str((profile or {}).get("ext", "") or ""),
             "sample_count": int((profile or {}).get("sample_count", 0) or 0),
         },
+        "ignored_name_conflicts": list(ignored_name_conflicts or []),
         "updated_at": int(_time.time()),
     }
     with _FFPROBE_CACHE_LOCK:
@@ -353,6 +356,11 @@ def _is_ffprobe_size_anomaly_reason(reason: str) -> bool:
 
 
 
+def _is_ffprobe_name_conflict_reason(reason: str) -> bool:
+    return str(reason or "") in _FFPROBE_NAME_CONFLICT_REASONS
+
+
+
 def _append_ffprobe_batch_size(batch_sizes: list[int], size: int) -> None:
     if int(size or 0) > 0:
         batch_sizes.append(int(size or 0))
@@ -377,7 +385,7 @@ def _record_ffprobe_segment_sample(segment_state: dict | None, sampled_profile: 
 
 
 
-def _is_ffprobe_anomaly(file_item: dict, parsed: dict, batch_profile: dict | None, batch_sizes: list[int]) -> tuple[bool, str]:
+def _is_ffprobe_anomaly(file_item: dict, parsed: dict, batch_profile: dict | None, batch_sizes: list[int], ignored_name_conflicts: set[str] | None = None) -> tuple[bool, str]:
     if _is_special_probe_candidate(str((file_item or {}).get("name", "") or "")):
         return True, "special_episode"
 
@@ -386,15 +394,16 @@ def _is_ffprobe_anomaly(file_item: dict, parsed: dict, batch_profile: dict | Non
     if profile_ext and current_ext and current_ext != profile_ext:
         return True, "extension_changed"
 
+    ignored_name_conflicts = ignored_name_conflicts or set()
     parsed_meta = dict((parsed or {}).get("meta_info") or {})
     if batch_profile:
         profile_pix = str(batch_profile.get("resource_pix", "") or "")
         profile_venc = str(batch_profile.get("video_encode", "") or "")
         parsed_pix = str(parsed_meta.get("resource_pix", "") or "")
         parsed_venc = str(parsed_meta.get("video_encode", "") or "")
-        if parsed_pix and profile_pix and parsed_pix != profile_pix:
+        if "resolution_conflict" not in ignored_name_conflicts and parsed_pix and profile_pix and parsed_pix != profile_pix:
             return True, "resolution_conflict"
-        if parsed_venc and profile_venc and parsed_venc != profile_venc:
+        if "codec_conflict" not in ignored_name_conflicts and parsed_venc and profile_venc and parsed_venc != profile_venc:
             return True, "codec_conflict"
         if not parsed_pix and not parsed_venc and int((batch_profile or {}).get("sample_count", 0) or 0) < _FFPROBE_BATCH_SAMPLE_LIMIT:
             return True, "need_more_samples"
@@ -1373,7 +1382,40 @@ async def _run_organize_async(run_id: str, req):
             ffprobe_batch_profiles: dict = {}
             ffprobe_batch_sizes: dict = {}
             ffprobe_batch_segment_samples: dict = {}
-            ffprobe_stats = {"sample": 0, "anomaly": 0, "cache": 0, "reuse": 0, "batch_cache": 0, "mismatch": 0, "full_probe": 0, "segment": 0}
+            ffprobe_name_conflict_samples: dict = {}
+            ffprobe_name_conflict_accepted: dict[tuple, set[str]] = {}
+            ffprobe_stats = {"sample": 0, "anomaly": 0, "cache": 0, "reuse": 0, "batch_cache": 0, "mismatch": 0, "full_probe": 0, "segment": 0, "name_conflict": 0}
+
+            def _record_ffprobe_name_conflict(ffprobe_batch_key: tuple, sampled_profile: dict, current_size: int, file_name: str, reason: str, base_profile: dict | None = None, base_sizes: list[int] | None = None) -> None:
+                conflict_sample_key = (ffprobe_batch_key, reason)
+                conflict_state = ffprobe_name_conflict_samples.get(conflict_sample_key)
+                if not conflict_state and base_profile and _profiles_match_for_batch(base_profile, sampled_profile):
+                    conflict_state = {
+                        "profile": _make_ffprobe_sample_profile(
+                            base_profile,
+                            base_profile.get("ext", ""),
+                            max(int(base_profile.get("sample_count", 0) or 0), 1),
+                        ),
+                        "sizes": list(base_sizes or []),
+                    }
+                conflict_state, conflict_reset = _record_ffprobe_segment_sample(conflict_state, sampled_profile, current_size)
+                ffprobe_name_conflict_samples[conflict_sample_key] = conflict_state
+                if conflict_reset:
+                    ffprobe_stats["mismatch"] += 1
+                    logger.debug(f"[MediaOrganize] FFPROBE命名冲突样本重置: {file_name} | batch={ffprobe_batch_key} | 原因={reason}")
+                conflict_profile = conflict_state.get("profile") or {}
+                conflict_sample_count = int(conflict_profile.get("sample_count", 0) or 0)
+                if conflict_sample_count >= _FFPROBE_BATCH_SAMPLE_LIMIT:
+                    ffprobe_batch_profiles[ffprobe_batch_key] = conflict_profile
+                    ffprobe_batch_sizes[ffprobe_batch_key] = list(conflict_state.get("sizes") or [])
+                    accepted_reasons = ffprobe_name_conflict_accepted.setdefault(ffprobe_batch_key, set())
+                    accepted_reasons.add(reason)
+                    _set_cached_ffprobe_batch_profile(ffprobe_batch_key, conflict_profile, ignored_name_conflicts=sorted(accepted_reasons))
+                    ffprobe_name_conflict_samples.pop(conflict_sample_key, None)
+                    ffprobe_stats["name_conflict"] += 1
+                    logger.debug(f"[MediaOrganize] FFPROBE命名冲突确认: {file_name} | batch={ffprobe_batch_key} | 样本数={conflict_sample_count} | 原因={reason}")
+                else:
+                    logger.debug(f"[MediaOrganize] FFPROBE命名冲突采样: {file_name} | batch={ffprobe_batch_key} | 样本数={conflict_sample_count}/{_FFPROBE_BATCH_SAMPLE_LIMIT} | 原因={reason}")
 
             def _record_ffprobe_segment(ffprobe_batch_key: tuple, sampled_profile: dict, current_size: int, file_name: str, reason: str, from_cache: bool = False) -> None:
                 segment_state = ffprobe_batch_segment_samples.get(ffprobe_batch_key)
@@ -1520,7 +1562,11 @@ async def _run_organize_async(run_id: str, req):
                             if disk_batch_profile:
                                 ffprobe_batch_profiles[ffprobe_batch_key] = disk_batch_profile
                                 batch_profile = disk_batch_profile
+                                cached_ignored_name_conflicts = set(disk_batch_profile.get("_ignored_name_conflicts") or [])
+                                if cached_ignored_name_conflicts:
+                                    ffprobe_name_conflict_accepted[ffprobe_batch_key] = cached_ignored_name_conflicts
                                 ffprobe_stats["batch_cache"] += 1
+                        ignored_name_conflicts = ffprobe_name_conflict_accepted.get(ffprobe_batch_key, set())
                         is_segment_sampling = ffprobe_batch_key in ffprobe_batch_segment_samples
                         cached_probe = _get_cached_ffprobe_fields(file_item)
                         if cached_probe:
@@ -1530,14 +1576,17 @@ async def _run_organize_async(run_id: str, req):
                             if is_segment_sampling:
                                 _record_ffprobe_segment(ffprobe_batch_key, sampled_profile, current_size, file_name, "segment_sampling", from_cache=True)
                             elif batch_profile:
-                                is_anomaly, anomaly_reason = _is_ffprobe_anomaly(file_item, parsed, batch_profile, batch_sizes)
+                                is_anomaly, anomaly_reason = _is_ffprobe_anomaly(file_item, parsed, batch_profile, batch_sizes, ignored_name_conflicts=ignored_name_conflicts)
                                 if _is_ffprobe_size_anomaly_reason(anomaly_reason):
                                     ffprobe_stats["anomaly"] += 1
                                     _record_ffprobe_segment(ffprobe_batch_key, sampled_profile, current_size, file_name, anomaly_reason, from_cache=True)
+                                elif _is_ffprobe_name_conflict_reason(anomaly_reason):
+                                    ffprobe_stats["anomaly"] += 1
+                                    _record_ffprobe_name_conflict(ffprobe_batch_key, sampled_profile, current_size, file_name, anomaly_reason, batch_profile, batch_sizes)
                                 elif not is_anomaly:
                                     _append_ffprobe_batch_size(batch_sizes, current_size)
                         else:
-                            is_anomaly, anomaly_reason = _is_ffprobe_anomaly(file_item, parsed, batch_profile, batch_sizes)
+                            is_anomaly, anomaly_reason = _is_ffprobe_anomaly(file_item, parsed, batch_profile, batch_sizes, ignored_name_conflicts=ignored_name_conflicts)
                             should_probe = is_segment_sampling or not batch_profile or is_anomaly
                             if batch_profile and not should_probe:
                                 variables = _merge_probe_fields_into_variables(variables, batch_profile)
@@ -1579,6 +1628,9 @@ async def _run_organize_async(run_id: str, req):
                                         elif _is_ffprobe_size_anomaly_reason(anomaly_reason):
                                             ffprobe_stats["anomaly"] += 1
                                             _record_ffprobe_segment(ffprobe_batch_key, sampled_profile, current_size, file_name, anomaly_reason)
+                                        elif _is_ffprobe_name_conflict_reason(anomaly_reason):
+                                            ffprobe_stats["anomaly"] += 1
+                                            _record_ffprobe_name_conflict(ffprobe_batch_key, sampled_profile, current_size, file_name, anomaly_reason, batch_profile, batch_sizes)
                                         else:
                                             ffprobe_stats["anomaly"] += 1
                                             logger.debug(f"[MediaOrganize] FFPROBE异常探测: {file_name} | 原因={anomaly_reason}")
@@ -1992,7 +2044,7 @@ async def _run_organize_async(run_id: str, req):
                     ))
 
             logger.debug(
-                f"[MediaOrganize] FFPROBE统计: 全量探测={ffprobe_stats['full_probe']} 样本={ffprobe_stats['sample']} 异常={ffprobe_stats['anomaly']} 文件缓存命中={ffprobe_stats['cache']} 批次缓存命中={ffprobe_stats['batch_cache']} 批次复用={ffprobe_stats['reuse']} 样本不一致={ffprobe_stats['mismatch']} 分段切换={ffprobe_stats['segment']}"
+                f"[MediaOrganize] FFPROBE统计: 全量探测={ffprobe_stats['full_probe']} 样本={ffprobe_stats['sample']} 异常={ffprobe_stats['anomaly']} 文件缓存命中={ffprobe_stats['cache']} 批次缓存命中={ffprobe_stats['batch_cache']} 批次复用={ffprobe_stats['reuse']} 样本不一致={ffprobe_stats['mismatch']} 分段切换={ffprobe_stats['segment']} 命名冲突确认={ffprobe_stats['name_conflict']}"
             )
 
             # 本组整理完：失败文件所在的顶层目录直接移到失败目录
