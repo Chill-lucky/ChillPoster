@@ -2518,8 +2518,6 @@ async def _run_organize_async(run_id: str, req):
 
         _flush_pending_library_cache_updates()
 
-        _flush_pending_media_server_refreshes()
-
         metadata_executor.shutdown(wait=True)
 
         failed_count = sum(1 for r in results if r.get("status") == "error")
@@ -2564,6 +2562,10 @@ async def _run_organize_async(run_id: str, req):
                 logger.warning(f"[MediaOrganize] 失败 {idx}/{len(failed_results)}: {failed_file} | 原因: {failed_reason}")
             if len(failed_results) > 20:
                 logger.warning(f"[MediaOrganize] 失败文件还有 {len(failed_results) - 20} 个未在摘要中展开")
+
+        await asyncio.sleep(1)
+        _flush_pending_media_server_refreshes()
+        await asyncio.sleep(1)
 
         try:
             await _cleanup_empty_source_dirs(client, str(source_cid))
@@ -4272,6 +4274,16 @@ def _get_source_cleanup_parent_path(path: str) -> str:
     return normalized.rsplit("/", 1)[0]
 
 
+def _is_115_request_blocked_error(err) -> bool:
+    err_text = str(err)
+    return (
+        "code=405" in err_text
+        or ("HTTPStatusError" in err_text and "405" in err_text)
+        or "Method Not Allowed" in err_text
+        or "被阻断" in err_text
+    )
+
+
 def _build_source_cleanup_delete_queue(client, source_cid: int) -> list[tuple[str, str, bool]]:
     from p115client.tool.iterdir import iter_dirs_with_path, iter_files_with_path
 
@@ -4310,7 +4322,7 @@ def _build_source_cleanup_delete_queue(client, source_cid: int) -> list[tuple[st
         file_id = str(item.get("id") or item.get("fid") or "")
         parent_path = _get_source_cleanup_parent_path(relpath)
         ext = os.path.splitext(file_name)[1].lower()
-        if ext in VIDEO_EXTS or ext in SUBTITLE_EXTS:
+        if ext in VIDEO_EXTS:
             direct_media_dirs.add(parent_path)
         elif not parent_path and file_id:
             root_non_media_files.append((file_id, file_name, False))
@@ -4342,9 +4354,34 @@ def _build_source_cleanup_delete_queue(client, source_cid: int) -> list[tuple[st
 
 
 async def _cleanup_empty_source_dirs(client, source_cid: str):
-    """清理源目录下不包含视频或字幕的子目录，并按旧语义处理根目录下的非媒体文件。"""
+    """清理源目录下不包含视频的子目录，并按旧语义处理根目录下的非视频文件。"""
     try:
-        to_delete = _build_source_cleanup_delete_queue(client, int(source_cid))
+        to_delete = None
+        scan_retry_delays = (0.0, 1.0, 3.0)
+        for attempt, delay in enumerate(scan_retry_delays, start=1):
+            if delay > 0:
+                await asyncio.sleep(delay)
+            try:
+                to_delete = _build_source_cleanup_delete_queue(client, int(source_cid))
+                if attempt > 1:
+                    logger.info(f"[MediaOrganize] 清理扫描重试成功: source_cid={source_cid} attempt={attempt}")
+                break
+            except Exception as scan_err:
+                if not _is_115_request_blocked_error(scan_err):
+                    raise
+                if attempt >= len(scan_retry_delays):
+                    logger.warning(
+                        f"[MediaOrganize] 清理扫描被 115 拦截，跳过本轮清理，稍后再清理: "
+                        f"source_cid={source_cid}"
+                    )
+                    return
+                logger.warning(
+                    f"[MediaOrganize] 清理扫描被 115 拦截，{scan_retry_delays[attempt]:.1f}s 后重试: "
+                    f"source_cid={source_cid} attempt={attempt}/{len(scan_retry_delays)}"
+                )
+
+        if to_delete is None:
+            return
 
         files_count = sum(1 for _, _, is_dir in to_delete if not is_dir)
         dirs_count = sum(1 for _, _, is_dir in to_delete if is_dir)

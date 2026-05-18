@@ -52,6 +52,8 @@ TMDB_FALLBACK_CACHE_TTL_SECONDS = 15
 TMDB_FALLBACK_WORKERS = 16
 TMDB_FALLBACK_SCRAPE_WORKERS = 40
 TMDB_FALLBACK_BATCH_SIZE = 2000
+AUX_DOWNLOAD_WORKERS = 15
+CDN_AUX_RETRY_DELAYS = (0.5, 1.5)
 
 # 处理结果
 ProcessResult = namedtuple("ProcessResult", ["status", "path", "message", "data"])
@@ -678,6 +680,33 @@ def _fetch_download_url_cdn(pickcode: str, cookie: str) -> str:
     return str(url)
 
 
+def _describe_download_error(err: Exception) -> str:
+    try:
+        import httpx
+        if isinstance(err, httpx.HTTPStatusError):
+            resp = err.response
+            req = err.request
+            reason = getattr(resp, "reason_phrase", "") or ""
+            method = getattr(req, "method", "") or ""
+            url = str(getattr(req, "url", "") or "")
+            return f"HTTP {resp.status_code} {reason} {method} {url}".strip()
+    except Exception:
+        pass
+    return str(err)
+
+
+def _is_retryable_download_error(err: Exception) -> bool:
+    try:
+        import httpx
+        if isinstance(err, httpx.HTTPStatusError):
+            return err.response.status_code in {403, 408, 429, 500, 502, 503, 504}
+        if isinstance(err, (httpx.TimeoutException, httpx.TransportError)):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _download_by_url(url: str, local_path: str, cancel_event: Optional[Event] = None):
     import httpx
     if cancel_event and cancel_event.is_set():
@@ -752,20 +781,42 @@ def _download_aux_file(
         logger.info(f"[STRM] 开始下载附属文件: {filename} | 类型:{file_class} | 模式:{download_mode} | 路径:{local_path}")
 
         if download_mode == "cdn":
-            try:
-                if not cookie:
-                    raise ValueError("CDN 模式缺少 cookie")
-                _check_cancel()
-                url = _fetch_download_url_cdn(pickcode, cookie)
-                _download_by_url(url, local_path, cancel_event=cancel_event)
-                logger.info(f"[STRM] CDN附属下载完成: {filename}")
-                return ("ok", filename, "")
-            except CancelledError:
-                return ("cancelled", filename, "cancelled")
-            except Exception as cdn_err:
-                logger.warning(f"[STRM] CDN下载失败，回退standard: {filename}: {cdn_err}")
+            if not cookie:
+                logger.warning(f"[STRM] CDN下载跳过，缺少 cookie，回退standard: {filename}")
                 _download_standard()
                 return ("ok", filename, "")
+
+            total_attempts = len(CDN_AUX_RETRY_DELAYS) + 1
+            last_cdn_err: Exception | None = None
+            for attempt in range(1, total_attempts + 1):
+                try:
+                    _check_cancel()
+                    url = _fetch_download_url_cdn(pickcode, cookie)
+                    _download_by_url(url, local_path, cancel_event=cancel_event)
+                    logger.info(f"[STRM] CDN附属下载完成: {filename}")
+                    return ("ok", filename, "")
+                except CancelledError:
+                    return ("cancelled", filename, "cancelled")
+                except Exception as cdn_err:
+                    last_cdn_err = cdn_err
+                    err_msg = _describe_download_error(cdn_err)
+                    can_retry = attempt < total_attempts and _is_retryable_download_error(cdn_err)
+                    if not can_retry:
+                        logger.warning(f"[STRM] CDN下载失败，回退standard: {filename}: {err_msg}")
+                        break
+                    delay = CDN_AUX_RETRY_DELAYS[attempt - 1]
+                    logger.warning(
+                        f"[STRM] CDN下载失败，{delay:.1f}s 后重试({attempt}/{total_attempts}): {filename}: {err_msg}"
+                    )
+                    time.sleep(delay)
+
+            try:
+                _download_standard()
+                return ("ok", filename, "")
+            except Exception as standard_err:
+                cdn_msg = _describe_download_error(last_cdn_err) if last_cdn_err else ""
+                standard_msg = _describe_download_error(standard_err)
+                raise RuntimeError(f"CDN失败: {cdn_msg}; standard失败: {standard_msg}") from standard_err
 
         _download_standard()
         return ("ok", filename, "")
@@ -823,7 +874,7 @@ def _batch_download_aux(
             cancel_event=cancel_event,
         )
 
-    with ThreadPoolExecutor(max_workers=15) as executor:
+    with ThreadPoolExecutor(max_workers=AUX_DOWNLOAD_WORKERS) as executor:
         futures = {executor.submit(_dl_one, it): it for it in to_download}
         for future in as_completed(futures):
             if cancel_event and cancel_event.is_set():

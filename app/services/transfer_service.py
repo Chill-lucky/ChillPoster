@@ -35,6 +35,7 @@ class TransferService:
     def __init__(self):
         self._max_history = 200
         self._history = self._load_history()
+        self._transfer_cid_cache: dict[str, int] = {}
 
     def _load_history(self) -> list:
         """从文件加载转存记录"""
@@ -275,10 +276,45 @@ class TransferService:
         if not client:
             return None, 0, "115 客户端未配置"
 
-        cid = await self._resolve_transfer_cid(client, drives, target_dir=target_dir)
+        try:
+            cid = await self._resolve_transfer_cid(client, cfg, drives, drive_index, target_dir=target_dir)
+        except Exception as e:
+            logger.warning(f"[转存] 解析转存目录失败: {e}")
+            return None, 0, f"转存目录解析失败: {e}"
         return client, cid, ""
 
-    async def _resolve_transfer_cid(self, client, drives, target_dir: str | None = None) -> int:
+    def _normalize_transfer_dir(self, transfer_dir: str) -> str:
+        transfer_dir = str(transfer_dir or "").strip()
+        if not transfer_dir or transfer_dir.isdigit():
+            return transfer_dir
+        return "/" + "/".join(part for part in transfer_dir.strip("/").split("/") if part)
+
+    def _configured_transfer_cid(self, cfg: dict, drives: list, transfer_dir: str, target_dir: str | None = None) -> int:
+        if target_dir:
+            return 0
+
+        normalized_dir = self._normalize_transfer_dir(transfer_dir)
+        candidates: list[tuple[str, str]] = []
+        if isinstance(drives, list) and drives:
+            drive_cfg = drives[0] if isinstance(drives[0], dict) else {}
+            candidates.append((
+                self._normalize_transfer_dir(str(drive_cfg.get("transfer_dir", "") or "")),
+                str(drive_cfg.get("transfer_dir_cid", "") or ""),
+            ))
+
+        topology = cfg.get("standard_topology", {}) if isinstance(cfg, dict) else {}
+        if isinstance(topology, dict):
+            candidates.append((
+                self._normalize_transfer_dir(str(topology.get("transfer_dir", "") or "")),
+                str(topology.get("transfer_dir_cid", "") or ""),
+            ))
+
+        for candidate_dir, candidate_cid in candidates:
+            if candidate_dir == normalized_dir and candidate_cid.isdigit():
+                return int(candidate_cid)
+        return 0
+
+    async def _resolve_transfer_cid(self, client, cfg, drives, drive_index: int = 0, target_dir: str | None = None) -> int:
         cid = 0
         transfer_dir = str(target_dir or "").strip()
         if not transfer_dir and isinstance(drives, list) and len(drives) > 0:
@@ -288,6 +324,18 @@ class TransferService:
             return cid
         if transfer_dir.isdigit():
             return int(transfer_dir)
+
+        transfer_dir = self._normalize_transfer_dir(transfer_dir)
+        cache_key = f"{int(drive_index)}:{transfer_dir}"
+        cached_cid = self._transfer_cid_cache.get(cache_key)
+        if cached_cid:
+            return cached_cid
+
+        configured_cid = self._configured_transfer_cid(cfg, drives, transfer_dir, target_dir=target_dir)
+        if configured_cid:
+            self._transfer_cid_cache[cache_key] = configured_cid
+            logger.info(f"[转存] 使用配置缓存目录: {transfer_dir} (CID={configured_cid})")
+            return configured_cid
 
         parts = [p for p in transfer_dir.strip("/").split("/") if p]
         if not parts:
@@ -324,10 +372,12 @@ class TransferService:
                         logger.warning(f"[转存] 创建目录失败 {current_path}: {err}")
                         cid = 0
                         break
+            if not cid:
+                raise RuntimeError(f"{transfer_dir}: 未能获取目标目录 CID")
+            self._transfer_cid_cache[cache_key] = int(cid)
             logger.info(f"[转存] 目录就绪: {transfer_dir} (CID={cid})")
         except Exception as e:
-            logger.warning(f"[转存] 目录操作异常 ({transfer_dir}): {e}，将转存到根目录")
-            cid = 0
+            raise RuntimeError(f"{transfer_dir}: {e}") from e
         return cid
 
     def _build_ed2k_results(
