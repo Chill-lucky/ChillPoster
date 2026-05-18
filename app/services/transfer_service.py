@@ -20,6 +20,8 @@ RE_115_SHARE_CODE = re.compile(r'[a-zA-Z0-9]{6,20}-[a-zA-Z0-9]{4,20}')
 SOURCE_NAMES = {
     "wechat": "企业微信",
     "telegram": "Telegram",
+    "telegram_monitor": "Telegram 监听",
+    "telegram_bot": "转存机器人",
     "manual": "手动",
 }
 
@@ -70,7 +72,13 @@ class TransferService:
 
         return self._dedupe_links(links)
 
-    async def process_links(self, links: list[str], source: str = "manual", target_dir: str | None = None) -> list[dict]:
+    async def process_links(
+        self,
+        links: list[str],
+        source: str = "manual",
+        target_dir: str | None = None,
+        source_meta: dict | None = None,
+    ) -> list[dict]:
         """批量处理资源链接，ed2k 链接会合并为一次 115 离线任务请求。"""
         normalized = self._dedupe_links([str(link or "").strip() for link in links if str(link or "").strip()])
         if not normalized:
@@ -85,16 +93,22 @@ class TransferService:
                 ed2k_links.append(link)
                 ed2k_positions.append(idx)
             else:
-                results[idx] = await self._process_115_share_link(link, source=source, target_dir=target_dir)
+                results[idx] = await self._process_115_share_link(link, source=source, target_dir=target_dir, source_meta=source_meta)
 
         if ed2k_links:
-            ed2k_results = await self._process_ed2k_links(ed2k_links, source=source, target_dir=target_dir)
+            ed2k_results = await self._process_ed2k_links(ed2k_links, source=source, target_dir=target_dir, source_meta=source_meta)
             for idx, result in zip(ed2k_positions, ed2k_results):
                 results[idx] = result
 
         return [result for result in results if result is not None]
 
-    async def process_link(self, link: str, source: str = "manual", target_dir: str | None = None) -> dict:
+    async def process_link(
+        self,
+        link: str,
+        source: str = "manual",
+        target_dir: str | None = None,
+        source_meta: dict | None = None,
+    ) -> dict:
         """
         处理单条资源链接。
 
@@ -103,11 +117,17 @@ class TransferService:
         """
         link = str(link or "").strip()
         if self._is_ed2k_link(link):
-            results = await self._process_ed2k_links([link], source=source, target_dir=target_dir)
+            results = await self._process_ed2k_links([link], source=source, target_dir=target_dir, source_meta=source_meta)
             return results[0]
-        return await self._process_115_share_link(link, source=source, target_dir=target_dir)
+        return await self._process_115_share_link(link, source=source, target_dir=target_dir, source_meta=source_meta)
 
-    async def _process_115_share_link(self, link: str, source: str = "manual", target_dir: str | None = None) -> dict:
+    async def _process_115_share_link(
+        self,
+        link: str,
+        source: str = "manual",
+        target_dir: str | None = None,
+        source_meta: dict | None = None,
+    ) -> dict:
         try:
             payload = share_extract_payload(link)
         except ValueError as e:
@@ -120,7 +140,7 @@ class TransferService:
                 "link_type": "115",
                 "message": f"链接解析失败: {e}",
             }
-            self._add_history(result, source, link)
+            self._add_history(result, source, link, source_meta=source_meta)
             return result
 
         share_code = payload.get("share_code", "")
@@ -137,7 +157,7 @@ class TransferService:
                 "link_type": "115",
                 "message": client_error,
             }
-            self._add_history(result, source, link)
+            self._add_history(result, source, link, source_meta=source_meta)
             return result
 
         try:
@@ -164,7 +184,7 @@ class TransferService:
                 "link_type": "115",
                 "message": f"115 接口调用失败: {e}",
             }
-            self._add_history(result, source, link)
+            self._add_history(result, source, link, source_meta=source_meta)
             return result
 
         state = resp.get("state", False) if isinstance(resp, dict) else False
@@ -204,17 +224,23 @@ class TransferService:
                 "message": f"转存失败 (115)\n链接: {link}\n原因: {error_msg or '未知错误'}",
             }
 
-        self._add_history(result, source, link)
+        self._add_history(result, source, link, source_meta=source_meta)
         return result
 
-    async def _process_ed2k_links(self, links: list[str], source: str = "manual", target_dir: str | None = None) -> list[dict]:
+    async def _process_ed2k_links(
+        self,
+        links: list[str],
+        source: str = "manual",
+        target_dir: str | None = None,
+        source_meta: dict | None = None,
+    ) -> list[dict]:
         links = self._dedupe_links([str(link or "").strip() for link in links if str(link or "").strip()])
         if not links:
             return []
 
         client, cid, client_error = await self._get_transfer_context(target_dir=target_dir)
         if not client:
-            return self._build_ed2k_results(links, False, "客户端错误", client_error, source)
+            return self._build_ed2k_results(links, False, "客户端错误", client_error, source, source_meta=source_meta)
 
         payload = {f"url[{idx}]": link for idx, link in enumerate(links)}
         payload["wp_path_id"] = cid
@@ -229,14 +255,14 @@ class TransferService:
             logger.info(f"[转存] offline_add_urls 返回: {json.dumps(resp, ensure_ascii=False)}")
         except Exception as e:
             logger.error(f"[转存] offline_add_urls 调用失败: {e}")
-            return self._build_ed2k_results(links, False, "离线任务添加失败", f"115 离线接口调用失败: {e}", source)
+            return self._build_ed2k_results(links, False, "离线任务添加失败", f"115 离线接口调用失败: {e}", source, source_meta=source_meta)
 
         success = self._response_success(resp)
         if success:
-            return self._build_ed2k_results(links, True, "离线任务已添加", "", source)
+            return self._build_ed2k_results(links, True, "离线任务已添加", "", source, source_meta=source_meta)
 
         error_msg = self._response_error(resp) or "未知错误"
-        return self._build_ed2k_results(links, False, "离线任务添加失败", error_msg, source)
+        return self._build_ed2k_results(links, False, "离线任务添加失败", error_msg, source, source_meta=source_meta)
 
     async def _get_transfer_context(self, target_dir: str | None = None):
         cfg = await get_config_302()
@@ -304,7 +330,15 @@ class TransferService:
             cid = 0
         return cid
 
-    def _build_ed2k_results(self, links: list[str], success: bool, status: str, error_msg: str, source: str) -> list[dict]:
+    def _build_ed2k_results(
+        self,
+        links: list[str],
+        success: bool,
+        status: str,
+        error_msg: str,
+        source: str,
+        source_meta: dict | None = None,
+    ) -> list[dict]:
         results = []
         batch_suffix = f"\n批量任务: {len(links)} 个" if len(links) > 1 else ""
         for link in links:
@@ -322,7 +356,7 @@ class TransferService:
                 "link_type": "ed2k",
                 "message": message,
             }
-            self._add_history(result, source, link)
+            self._add_history(result, source, link, source_meta=source_meta)
             results.append(result)
         return results
 
@@ -369,11 +403,31 @@ class TransferService:
             result.append(link)
         return result
 
-    def _add_history(self, result: dict, source: str, link: str):
+    def _normalize_source_meta(self, source: str, source_meta: dict | None = None) -> dict:
+        meta = dict(source_meta or {})
+        source_key = str(meta.get("source_key") or source or "manual").strip() or "manual"
+        source_label = str(meta.get("source_label") or SOURCE_NAMES.get(source_key) or SOURCE_NAMES.get(source) or source_key).strip()
+        source_kind = str(meta.get("source_kind") or source_key).strip()
+        source_detail = str(meta.get("source_detail") or "").strip()
+        source_id = str(meta.get("source_id") or "").strip()
+        return {
+            "source_key": source_key,
+            "source_label": source_label,
+            "source_kind": source_kind,
+            "source_detail": source_detail,
+            "source_id": source_id,
+        }
+
+    def _add_history(self, result: dict, source: str, link: str, source_meta: dict | None = None):
         """添加转存记录"""
+        normalized_source = self._normalize_source_meta(source, source_meta)
         self._history.insert(0, {
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "source": SOURCE_NAMES.get(source, source),
+            "source": normalized_source["source_label"],
+            "source_key": normalized_source["source_key"],
+            "source_kind": normalized_source["source_kind"],
+            "source_detail": normalized_source["source_detail"],
+            "source_id": normalized_source["source_id"],
             "link": link,
             "status": result.get("status", ""),
             "name": result.get("name", ""),

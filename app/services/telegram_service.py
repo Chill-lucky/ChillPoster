@@ -565,6 +565,39 @@ class TelegramNotifyService:
     def _selected_dialog_ids(self) -> set[str]:
         return {str(item.get("id", "") or "").strip() for item in self.config.get("selected_dialogs", []) if str(item.get("id", "") or "").strip()}
 
+    def _selected_dialog_label(self, dialog_id: str) -> str:
+        dialog_id = str(dialog_id or "").strip()
+        for item in self.config.get("selected_dialogs", []):
+            if str(item.get("id", "") or "").strip() != dialog_id:
+                continue
+            return str(item.get("title") or item.get("username") or dialog_id).strip()
+        return dialog_id
+
+    def _bot_chat_label(self, chat: dict) -> str:
+        if not isinstance(chat, dict):
+            return ""
+        title = str(chat.get("title") or "").strip()
+        username = str(chat.get("username") or "").strip()
+        first_name = str(chat.get("first_name") or "").strip()
+        last_name = str(chat.get("last_name") or "").strip()
+        name = title or username or " ".join(part for part in [first_name, last_name] if part).strip()
+        return name or str(chat.get("id", "") or "").strip()
+
+    async def _event_chat_label(self, event, event_chat_id: str) -> str:
+        label = self._selected_dialog_label(event_chat_id)
+        if label and label != str(event_chat_id):
+            return label
+        try:
+            chat = getattr(event, "chat", None) or await event.get_chat()
+            return str(
+                getattr(chat, "title", "")
+                or getattr(chat, "username", "")
+                or getattr(chat, "first_name", "")
+                or event_chat_id
+            ).strip()
+        except Exception:
+            return str(event_chat_id or "").strip()
+
     def _send_request(self, method: str, payload: dict) -> bool:
         """发送请求到 Telegram API"""
         bot_token = self.config.get("bot_token")
@@ -1201,6 +1234,7 @@ class TelegramNotifyService:
             return
 
         chat_id = str((msg.get("chat") or {}).get("id", "") or "")
+        chat_label = self._bot_chat_label(msg.get("chat") or {})
         logger.info(f"[Telegram通知] 收到 {len(links)} 条资源链接 (chat={chat_id})")
 
         from app.services.transfer_service import transfer_service
@@ -1210,8 +1244,15 @@ class TelegramNotifyService:
             results = loop.run_until_complete(
                 transfer_service.process_links(
                     links,
-                    source="telegram",
+                    source="telegram_bot",
                     target_dir=self._monitor_transfer_dir(),
+                    source_meta={
+                        "source_key": "telegram_bot",
+                        "source_kind": "telegram_bot",
+                        "source_label": "转存机器人",
+                        "source_detail": chat_label,
+                        "source_id": chat_id,
+                    },
                 )
             )
             for result in results:
@@ -1308,6 +1349,7 @@ class TelegramNotifyService:
         if not links:
             return
 
+        chat_label = await self._event_chat_label(event, event_chat_id)
         logger.info(f"[Telegram账号] 收到 {len(links)} 条资源链接 (chat={event_chat_id})")
 
         from app.services.transfer_service import transfer_service
@@ -1315,8 +1357,15 @@ class TelegramNotifyService:
         try:
             results = await transfer_service.process_links(
                 links,
-                source="telegram",
+                source="telegram_monitor",
                 target_dir=self._monitor_transfer_dir(),
+                source_meta={
+                    "source_key": "telegram_monitor",
+                    "source_kind": "telegram_monitor",
+                    "source_label": "Telegram 监听",
+                    "source_detail": chat_label,
+                    "source_id": event_chat_id,
+                },
             )
             for result in results:
                 try:

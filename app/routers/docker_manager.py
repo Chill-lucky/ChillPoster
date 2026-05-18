@@ -390,6 +390,19 @@ def _update_progress(run_id: str, step_no: int, step_key: str, message: str, lev
     _task_log(run_id, message, level)
 
 
+def _format_pull_event(item: dict) -> str:
+    status = str(item.get("status") or item.get("stream") or "").strip()
+    detail = str(item.get("id") or "").strip()
+    progress = str(item.get("progress") or "").strip()
+    error = item.get("error") or (item.get("errorDetail") or {}).get("message")
+    if error:
+        status = str(error).strip()
+    message = f"{detail}: {status}" if detail and status else status or detail
+    if progress:
+        message = f"{message} {progress}".strip()
+    return message.strip()
+
+
 def _run_update_task(run_id: str, container_id: str, image: str):
     api = DockerAPI(timeout=900)
     try:
@@ -405,15 +418,18 @@ def _run_update_task(run_id: str, container_id: str, image: str):
 
         _update_progress(run_id, 2, "pull", f"正在拉取最新镜像: {image}")
         try:
-            pull_result = api.pull_image(image)
-            if isinstance(pull_result, list):
-                for item in pull_result[-12:]:
-                    if not isinstance(item, dict):
-                        continue
-                    status = item.get("status") or item.get("stream") or ""
-                    detail = item.get("id") or ""
-                    if status:
-                        _task_log(run_id, f"{detail + ': ' if detail else ''}{status}".strip())
+            last_pull_message = {"value": ""}
+
+            def pull_progress(item: dict):
+                if not isinstance(item, dict):
+                    return
+                message = _format_pull_event(item)
+                if not message or message == last_pull_message["value"]:
+                    return
+                last_pull_message["value"] = message
+                _task_log(run_id, message, "error" if item.get("error") else "info")
+
+            api.pull_image(image, progress=pull_progress)
         except Exception as e:
             _task_log(run_id, str(e), "error")
             raise RuntimeError(f"拉取镜像失败: {e}")

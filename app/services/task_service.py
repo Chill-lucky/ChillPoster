@@ -22,7 +22,7 @@ from core.engine import PosterEngine
 from core.configs import TEMPLATES_DIR, FONTS_DIR, LAYOUTS_DIR, TASKS_FILE
 from core.logger import logger
 from app.routers.config_302 import get_emby_config_by_index_sync
-from PIL import Image, ImageFilter
+from PIL import Image
 
 # 引入 115 服务 (用于清理任务)
 from app.services.drive115_service import drive115_service
@@ -40,7 +40,7 @@ from app.dependencies import (
 # ==========================================
 # 1. 任务执行逻辑 (封面生成)
 # ==========================================
-def _build_wechat_cover_preview(image_data: bytes, width: int = 900, height: int = 383) -> bytes:
+def _build_wechat_cover_preview(image_data: bytes, width: int = 900, height: int = 506) -> bytes:
     source = Image.open(BytesIO(image_data)).convert("RGB")
     bg = source.copy()
     bg_ratio = width / height
@@ -53,7 +53,7 @@ def _build_wechat_cover_preview(image_data: bytes, width: int = 900, height: int
         crop_h = int(bg.width / bg_ratio)
         top = max((bg.height - crop_h) // 2, 0)
         bg = bg.crop((0, top, bg.width, top + crop_h))
-    bg = bg.resize((width, height), Image.LANCZOS).filter(ImageFilter.GaussianBlur(18))
+    bg = bg.resize((width, height), Image.LANCZOS)
 
     fg = source.copy()
     fg.thumbnail((width, height), Image.LANCZOS)

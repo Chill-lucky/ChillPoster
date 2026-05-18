@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 
 export function useResourceTransfer({ tab, config302, build302Payload, showToast }) {
     // ==========================================
@@ -9,6 +9,8 @@ export function useResourceTransfer({ tab, config302, build302Payload, showToast
     const transferLoading = ref(false);
     const transferResult = ref(null);
     const transferHistory = ref([]);
+    const transferPage = ref(1);
+    const transferPageSize = ref(12);
     const transferConfig = reactive({ dir: '', drive_index: 0 });
     const transferConfigForm = reactive({ dir: '', drive_index: 0 });
     const transferDirBrowser = reactive({
@@ -19,6 +21,57 @@ export function useResourceTransfer({ tab, config302, build302Payload, showToast
         history: [],
         dirs: []
     });
+    const transferHistoryStats = computed(() => {
+        const total = transferHistory.value.length;
+        const success = transferHistory.value.filter((item) => getTransferStatusClass(item) === 'success').length;
+        const failed = transferHistory.value.filter((item) => getTransferStatusClass(item) === 'error').length;
+        return { total, success, failed };
+    });
+    const transferDirLabel = computed(() => transferConfigForm.dir || transferConfig.dir || '根目录');
+    const transferPageCount = computed(() => Math.max(1, Math.ceil(transferHistory.value.length / transferPageSize.value)));
+    const transferHistoryRange = computed(() => {
+        const total = transferHistory.value.length;
+        if (!total) return { start: 0, end: 0, total };
+        const start = (transferPage.value - 1) * transferPageSize.value + 1;
+        const end = Math.min(start + transferPageSize.value - 1, total);
+        return { start, end, total };
+    });
+    const paginatedTransferHistory = computed(() => {
+        const start = (transferPage.value - 1) * transferPageSize.value;
+        return transferHistory.value.slice(start, start + transferPageSize.value);
+    });
+
+    const getTransferSourceClass = (itemOrSource = '') => {
+        const value = typeof itemOrSource === 'object'
+            ? [
+                itemOrSource.source_key,
+                itemOrSource.source_kind,
+                itemOrSource.source_label,
+                itemOrSource.source
+            ].filter(Boolean).join(' ').toLowerCase()
+            : String(itemOrSource || '').toLowerCase();
+        if (value.includes('telegram_bot') || value.includes('机器人')) return 'telegram-bot';
+        if (value.includes('telegram_monitor') || value.includes('监听')) return 'telegram-monitor';
+        if (value.includes('telegram')) return 'telegram';
+        if (value.includes('微信') || value.includes('wechat')) return 'wechat';
+        if (value.includes('手动') || value.includes('manual')) return 'manual';
+        return 'default';
+    };
+
+    const getTransferSourceText = (item = {}) => item.source_label || item.source || '未知';
+    const getTransferSourceDetail = (item = {}) => item.source_detail || item.channel_title || item.chat_title || '';
+
+    function getTransferStatusClass(item = {}) {
+        const status = String(item.status || '').toLowerCase();
+        if (item.success === true || status.includes('成功') || status.includes('已添加')) return 'success';
+        if (item.success === false || status.includes('失败') || status.includes('错误')) return 'error';
+        return 'info';
+    }
+
+    const setTransferPage = (page) => {
+        const next = Number(page) || 1;
+        transferPage.value = Math.min(Math.max(next, 1), transferPageCount.value);
+    };
 
     const loadTransferConfig = () => {
         if (config302.drives && config302.drives.length > 0) {
@@ -116,6 +169,7 @@ export function useResourceTransfer({ tab, config302, build302Payload, showToast
         try {
             const res = await axios.get('/api/transfer/history');
             transferHistory.value = res.data || [];
+            setTransferPage(transferPage.value);
         } catch { /* ignore */ }
     };
 
@@ -124,6 +178,7 @@ export function useResourceTransfer({ tab, config302, build302Payload, showToast
         try {
             await axios.delete('/api/transfer/history');
             transferHistory.value = [];
+            transferPage.value = 1;
         } catch { /* ignore */ }
     };
 
@@ -133,19 +188,34 @@ export function useResourceTransfer({ tab, config302, build302Payload, showToast
             loadTransferConfig();
             loadTransferHistory();
         }
-    });
+    }, { immediate: true });
 
     // 302 配置加载后同步转存配置
     watch(() => config302.drives, () => loadTransferConfig(), { deep: true });
+    watch([() => transferHistory.value.length, transferPageSize], () => {
+        setTransferPage(transferPage.value);
+    });
 
     return {
         transferInput,
         transferLoading,
         transferResult,
         transferHistory,
+        transferHistoryStats,
+        transferPage,
+        transferPageSize,
+        transferPageCount,
+        transferHistoryRange,
+        paginatedTransferHistory,
         transferConfig,
         transferConfigForm,
+        transferDirLabel,
         transferDirBrowser,
+        getTransferSourceClass,
+        getTransferSourceText,
+        getTransferSourceDetail,
+        getTransferStatusClass,
+        setTransferPage,
         loadTransferConfig,
         loadTransferHistory,
         browseTransferDir,

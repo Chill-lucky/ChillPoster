@@ -4,6 +4,7 @@ import os
 import re
 import socket
 import urllib.parse
+from collections.abc import Callable
 
 
 DOCKER_SOCKET = "/var/run/docker.sock"
@@ -93,6 +94,48 @@ class DockerAPI:
             raise DockerApiError(resp.status, text.strip() or resp.reason)
         return raw
 
+    def request_json_stream(
+        self,
+        method: str,
+        path: str,
+        body=None,
+        headers: dict | None = None,
+        on_item: Callable[[dict], None] | None = None,
+    ) -> list[dict]:
+        payload = None
+        req_headers = headers.copy() if headers else {}
+        if body is not None:
+            payload = json.dumps(body).encode("utf-8")
+            req_headers.setdefault("Content-Type", "application/json")
+
+        conn = UnixHTTPConnection(self.socket_path, timeout=self.timeout)
+        items: list[dict] = []
+        try:
+            conn.request(method, path, body=payload, headers=req_headers)
+            resp = conn.getresponse()
+            if resp.status >= 400:
+                raw = resp.read()
+                text = raw.decode("utf-8", errors="replace") if raw else ""
+                raise DockerApiError(resp.status, text.strip() or resp.reason)
+
+            while True:
+                line = resp.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").strip()
+                if not text:
+                    continue
+                try:
+                    item = json.loads(text)
+                except json.JSONDecodeError:
+                    item = {"stream": text}
+                items.append(item)
+                if on_item:
+                    on_item(item)
+        finally:
+            conn.close()
+        return items
+
     def ping(self):
         return self.request("GET", "/_ping")
 
@@ -122,10 +165,10 @@ class DockerAPI:
         })
         return self.request_raw("GET", f"/containers/{quoted}/logs?{query}")
 
-    def pull_image(self, image: str):
+    def pull_image(self, image: str, progress: Callable[[dict], None] | None = None):
         repo, tag = split_image_ref(image)
         query = urllib.parse.urlencode({"fromImage": repo, "tag": tag})
-        result = self.request("POST", f"/images/create?{query}")
+        result = self.request_json_stream("POST", f"/images/create?{query}", on_item=progress)
         if isinstance(result, list):
             for item in result:
                 if not isinstance(item, dict):

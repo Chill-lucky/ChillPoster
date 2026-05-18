@@ -392,9 +392,21 @@ createApp({
             transferLoading,
             transferResult,
             transferHistory,
+            transferHistoryStats,
+            transferPage,
+            transferPageSize,
+            transferPageCount,
+            transferHistoryRange,
+            paginatedTransferHistory,
             transferConfig,
             transferConfigForm,
+            transferDirLabel,
             transferDirBrowser,
+            getTransferSourceClass,
+            getTransferSourceText,
+            getTransferSourceDetail,
+            getTransferStatusClass,
+            setTransferPage,
             loadTransferConfig,
             loadTransferHistory,
             browseTransferDir,
@@ -1688,7 +1700,7 @@ createApp({
             mainGridSentinel, mainGridScrollRoot, loadMainGrid, resetMainGrid,
 
             // [新增] 资源转存
-            transferInput, transferLoading, transferResult, transferHistory, transferConfig, transferConfigForm, transferDirBrowser, browseTransferDir, selectTransferDir, transferDirUp, applyTransferDir, saveTransferConfig, clearTransferHistory,
+            transferInput, transferLoading, transferResult, transferHistory, transferHistoryStats, transferPage, transferPageSize, transferPageCount, transferHistoryRange, paginatedTransferHistory, transferConfig, transferConfigForm, transferDirLabel, transferDirBrowser, getTransferSourceClass, getTransferSourceText, getTransferSourceDetail, getTransferStatusClass, setTransferPage, browseTransferDir, selectTransferDir, transferDirUp, applyTransferDir, saveTransferConfig, clearTransferHistory,
             manualTransfer, loadTransferHistory,
 
             // [新增] STRM 同步
