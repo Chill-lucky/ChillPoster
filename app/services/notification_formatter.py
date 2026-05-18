@@ -3,7 +3,7 @@ import copy
 from jinja2 import Template
 
 # 模板版本号：每次修改 DEFAULT_TEMPLATES 内容时递增，触发强制覆盖旧配置
-TEMPLATE_VERSION = 9
+TEMPLATE_VERSION = 10
 
 # 通知模板默认值
 DEFAULT_TEMPLATES = {
@@ -43,7 +43,20 @@ DEFAULT_TEMPLATES = {
     },
     "task_complete": {
         "title": "{{ status_emoji }} {{ task_name }}",
-        "text": "{% if status_text %}{{ status_emoji }} 状态：{{ status_text }}{% endif %}"
+        "text": "{% if task_category == 'media_organize' %}"
+                "{{ status_emoji }} 状态：{{ status_text }}"
+                "\n🧩 类型：媒体整理任务"
+                "{% if elapsed %}\n⏱️ 总耗时：{{ elapsed }}{% endif %}"
+                "{% if total_count %}\n📦 扫描视频：{{ total_count }}{% endif %}"
+                "{% if success_count %}\n✅ 整理成功：{{ success_count }}{% endif %}"
+                "{% if failed %}\n❌ 整理失败：{{ failed }}{% endif %}"
+                "{% if skipped %}\n⏭️ 跳过处理：{{ skipped }}{% endif %}"
+                "{% if generated %}\n🎞️ 新生成STRM：{{ generated }}{% endif %}"
+                "{% if detail %}\n\n📝 {{ detail }}{% endif %}"
+                "\n🕒 完成时间：{{ now }}"
+                "\n\n— ChillPoster"
+                "{% else %}"
+                "{% if status_text %}{{ status_emoji }} 状态：{{ status_text }}{% endif %}"
                 "{% if task_category == 'signin' %}\n🔔 类型：115 自动签到{% elif task_category == 'poster' %}\n🎨 类型：海报生成任务{% elif task_category %}\n🧩 类型：{{ task_category }}{% endif %}"
                 "{% if trigger %}\n🚀 触发：{{ trigger }}{% endif %}"
                 "{% if elapsed %}\n⏱️ 耗时：{{ elapsed }}{% endif %}"
@@ -66,6 +79,7 @@ DEFAULT_TEMPLATES = {
                 "{% if accounts_text and task_category != 'signin' %}\n\n{{ accounts_text }}{% endif %}"
                 "\n🕒 时间：{{ now }}"
                 "\n\n— ChillPoster"
+                "{% endif %}"
     }
 }
 

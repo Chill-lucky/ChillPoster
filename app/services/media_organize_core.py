@@ -1455,6 +1455,7 @@ async def _run_organize_async(run_id: str, req):
                 return tmdb_cache[cache_key]
 
         async def _identify_group(key, group):
+            notify_started_at = _time.time()
             try:
                 _, search_result = await _search_group(key, group)
                 search_cache[key] = search_result
@@ -1490,6 +1491,7 @@ async def _run_organize_async(run_id: str, req):
                 "search_result": search_result,
                 "tmdb_data": tmdb_data,
                 "error_message": error_message,
+                "notify_started_at": notify_started_at,
             }
 
         logger.debug("[MediaOrganize] 阶段1/4: 加载源目录快照并前置SHA1排重")
@@ -1511,6 +1513,11 @@ async def _run_organize_async(run_id: str, req):
             identified_search_result = identified.get("search_result")
             identified_tmdb_data = identified.get("tmdb_data")
             identified_error_message = str(identified.get("error_message", "") or "")
+            try:
+                notify_started_at = float(identified.get("notify_started_at") or _time.time())
+            except (TypeError, ValueError):
+                notify_started_at = _time.time()
+            common_notify_elapsed_seconds = max(0.0, _time.time() - notify_started_at)
             search_cache[key] = identified_search_result
             group_failed = []
             tv_root_scraped = set()
@@ -1597,6 +1604,7 @@ async def _run_organize_async(run_id: str, req):
                 file_item = vf
 
                 try:
+                    item_notify_started_at = _time.time()
                     search_result = identified_search_result
 
                     if not search_result:
@@ -1914,11 +1922,10 @@ async def _run_organize_async(run_id: str, req):
                         )
 
                     if media_type == 'movie':
-                        notify_elapsed_started_at = _time.time()
                         result = await loop.run_in_executor(None, lambda _c=client, _fi=file_item, _fn=file_name, _e=ext, _td=tmdb_data, _v=variables, _tc=effective_target_cid, _cd=config_data, _ow=req.overwrite, _cp=category_path or "", _tb=target_base, _sp=subtitles_by_parent, _ltk=library_task_key: _organize_movie(
                             _c, _fi, _fn, _e, _td, _v, _tc, _cd, _ow, category_path=_cp, target_path_base=_tb, subtitles_by_parent=_sp, main_loop=_state._main_event_loop, library_task_key=_ltk
                         ))
-                        notify_elapsed_seconds = _time.time() - notify_elapsed_started_at
+                        notify_elapsed_seconds = common_notify_elapsed_seconds + max(0.0, _time.time() - item_notify_started_at)
                         results.append({"file": file_name, "status": result["status"], "message": result.get("message", "")})
                         if result["status"] == "success":
                             success_count += 1
@@ -1983,6 +1990,7 @@ async def _run_organize_async(run_id: str, req):
                                 "batch_context": batch_context,
                                 "items": [],
                                 "item_index": {},
+                                "prepare_elapsed": 0.0,
                             }
                             if scrape_tv_root:
                                 tv_root_scraped.add(tv_root_key)
@@ -2026,11 +2034,17 @@ async def _run_organize_async(run_id: str, req):
                             incoming_size_gb = float((vf or {}).get("size", 0) or 0) / (1024 ** 3)
                             existing_size_gb = float(((existing_plan.get("vf") or {}).get("size", 0) or 0)) / (1024 ** 3)
                             if keep_incoming:
-                                pending_tv_batches[batch_key]["items"] = [
-                                    item for item in pending_tv_batches[batch_key]["items"]
+                                batch_entry = pending_tv_batches[batch_key]
+                                batch_entry["items"] = [
+                                    item for item in batch_entry["items"]
                                     if item is not existing_plan
                                 ]
-                                pending_tv_batches[batch_key]["item_index"].pop((season_num, episode_num), None)
+                                batch_entry["item_index"].pop((season_num, episode_num), None)
+                                batch_entry["prepare_elapsed"] = max(
+                                    0.0,
+                                    float(batch_entry.get("prepare_elapsed") or 0.0)
+                                    - float(existing_plan.get("_notify_prepare_elapsed") or 0.0),
+                                )
                                 logger.info(
                                     "[Wash] 同批次重复剧集命中，保留新文件: %s -> %s | S%02dE%02d | reason=%s | new_size=%.2fGB | old_size=%.2fGB",
                                     file_name,
@@ -2082,8 +2096,12 @@ async def _run_organize_async(run_id: str, req):
                                     )
                                 continue
 
-                        pending_tv_batches[batch_key]["items"].append(plan)
-                        pending_tv_batches[batch_key]["item_index"][(season_num, episode_num)] = plan
+                        batch_entry = pending_tv_batches[batch_key]
+                        plan_prepare_elapsed = max(0.0, _time.time() - item_notify_started_at)
+                        plan["_notify_prepare_elapsed"] = plan_prepare_elapsed
+                        batch_entry["items"].append(plan)
+                        batch_entry["item_index"][(season_num, episode_num)] = plan
+                        batch_entry["prepare_elapsed"] = float(batch_entry.get("prepare_elapsed") or 0.0) + plan_prepare_elapsed
                 except Exception as e:
                     logger.error(f"[MediaOrganize] 整理文件失败 {file_name}: {e}", exc_info=True)
                     results.append({"file": file_name, "status": "error", "message": str(e)})
@@ -2104,12 +2122,17 @@ async def _run_organize_async(run_id: str, req):
 
             for batch_key, batch_entry in pending_tv_batches.items():
                 plan_items = batch_entry.get("items", [])
-                notify_elapsed_started_at = _time.time()
+                batch_execute_started_at = _time.time()
                 batch_results = await loop.run_in_executor(
                     None,
                     lambda _c=client, _items=plan_items, _sp=subtitles_by_parent: _execute_tv_batch_plan(_c, _items, subtitles_by_parent=_sp, main_loop=_state._main_event_loop),
                 )
-                notify_elapsed_seconds = _time.time() - notify_elapsed_started_at
+                batch_execute_elapsed = max(0.0, _time.time() - batch_execute_started_at)
+                notify_elapsed_seconds = (
+                    common_notify_elapsed_seconds
+                    + float(batch_entry.get("prepare_elapsed") or 0.0)
+                    + batch_execute_elapsed
+                )
                 batch_success = 0
                 batch_size = 0
                 batch_episodes = []
@@ -2623,6 +2646,20 @@ async def _run_organize_async(run_id: str, req):
             f"预告片 {trailer_skipped_count}, 其他 {other_skipped_count}) | "
             f"新生成STRM {strm_generated_count} | 耗时 {elapsed:.1f}s"
         )
+        _send_organize_task_notify(
+            status="success" if failed_count == 0 else "error",
+            total_files=total_files,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            sha1_duplicate_skipped_count=sha1_duplicate_skipped_count,
+            wash_rejected_skipped_count=wash_rejected_skipped_count,
+            same_batch_duplicate_skipped_count=same_batch_duplicate_skipped_count,
+            trailer_skipped_count=trailer_skipped_count,
+            other_skipped_count=other_skipped_count,
+            strm_generated_count=strm_generated_count,
+            elapsed_seconds=elapsed,
+        )
         if failed_results:
             logger.warning(f"[MediaOrganize] 本次失败文件明细: {len(failed_results)} 个")
             for idx, failed in enumerate(failed_results[:20], 1):
@@ -2667,6 +2704,18 @@ async def _run_organize_async(run_id: str, req):
             "total": scanned_video_count, "success": success_count, "failed": _failed, "strm": strm_generated_count,
         }
         logger.info(f"[MediaOrganize] 整理已取消: 成功 {success_count}/{scanned_video_count}")
+        skipped_count = sum(1 for r in results if r.get("status") == "skipped")
+        elapsed = _time.time() - locals().get("_org_start", _time.time())
+        _send_organize_task_notify(
+            status="stopped",
+            total_files=scanned_video_count,
+            success_count=success_count,
+            failed_count=_failed,
+            skipped_count=skipped_count,
+            strm_generated_count=strm_generated_count,
+            elapsed_seconds=elapsed,
+            detail=f"已处理 {_processed}/{scanned_video_count}",
+        )
 
     except Exception as e:
         organize_cancel_event.set()
@@ -2687,6 +2736,19 @@ async def _run_organize_async(run_id: str, req):
             pass
         logger.error(f"[MediaOrganize] 整理失败: {e}", exc_info=True)
         update_task_progress(run_id, f"整理失败: {e}", 0, "error")
+        _failed = _count_error_results(results)
+        skipped_count = sum(1 for r in results if r.get("status") == "skipped")
+        elapsed = _time.time() - locals().get("_org_start", _time.time())
+        _send_organize_task_notify(
+            status="error",
+            total_files=scanned_video_count,
+            success_count=success_count,
+            failed_count=_failed or 1,
+            skipped_count=skipped_count,
+            strm_generated_count=strm_generated_count,
+            elapsed_seconds=elapsed,
+            detail=f"失败原因：{e}",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2774,6 +2836,60 @@ def _send_organize_notify(payload: dict):
     from app.services.telegram_service import telegram_notify_service
     wechat_notify_service.notify_organize_complete(**payload)
     telegram_notify_service.notify_organize_complete(**payload)
+
+
+def _send_organize_task_notify(
+    *,
+    status: str,
+    total_files: int = 0,
+    success_count: int = 0,
+    failed_count: int = 0,
+    skipped_count: int = 0,
+    sha1_duplicate_skipped_count: int = 0,
+    wash_rejected_skipped_count: int = 0,
+    same_batch_duplicate_skipped_count: int = 0,
+    trailer_skipped_count: int = 0,
+    other_skipped_count: int = 0,
+    strm_generated_count: int = 0,
+    elapsed_seconds: float | None = None,
+    detail: str = "",
+):
+    try:
+        from app.services.wechat_service import wechat_notify_service
+        from app.services.telegram_service import telegram_notify_service
+
+        elapsed = f"{elapsed_seconds:.1f}s" if elapsed_seconds is not None else ""
+        detail_lines = []
+        if skipped_count or any((
+            sha1_duplicate_skipped_count,
+            wash_rejected_skipped_count,
+            same_batch_duplicate_skipped_count,
+            trailer_skipped_count,
+            other_skipped_count,
+        )):
+            detail_lines.append(
+                f"跳过明细：SHA1重复 {sha1_duplicate_skipped_count}，洗版未通过 {wash_rejected_skipped_count}，"
+                f"同批次重复 {same_batch_duplicate_skipped_count}，预告片 {trailer_skipped_count}，其他 {other_skipped_count}"
+            )
+        if detail:
+            detail_lines.append(detail)
+
+        notify_kwargs = {
+            "task_name": "媒体整理任务",
+            "status": status,
+            "task_category": "media_organize",
+            "elapsed": elapsed,
+            "total_count": total_files,
+            "success_count": success_count,
+            "failed": failed_count,
+            "skipped": skipped_count,
+            "generated": strm_generated_count,
+            "detail": "\n".join(detail_lines),
+        }
+        wechat_notify_service.notify_task_complete(**notify_kwargs)
+        telegram_notify_service.notify_task_complete(**notify_kwargs)
+    except Exception as notify_err:
+        logger.warning(f"[MediaOrganize] 任务通知发送失败: {notify_err}")
 
 
 def _finalize_organize_result(
