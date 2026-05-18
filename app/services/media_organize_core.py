@@ -1000,45 +1000,36 @@ async def _trigger_auto_organize_and_wait(drive_index: int, source_tree_entries:
         with _organize_trigger_lock:
             if _state._organize_running:
                 done_event = _state._organize_done_event
-                wait_for_existing = True
             else:
-                _state._organize_running = True
-                _state._organize_done_event = asyncio.Event()
-                wait_for_existing = False
+                done_event = None
 
-        if wait_for_existing:
+        if done_event is not None:
             logger.info("[115Life] 整理任务已在运行，等待现有任务完成后补跑")
-            if done_event:
-                await done_event.wait()
-            else:
-                await asyncio.sleep(1)
+            await done_event.wait()
             source_tree_entries = None
             continue
 
-        try:
-            organize_req = OrganizeRequest(drive_index=drive_index)
-            if source_tree_entries is not None:
-                organize_req._prefetched_source_tree_entries = list(source_tree_entries or [])
-            result = await organize_media(organize_req)
-            if result.get("status") != "ok":
-                return "", str(result.get("message", "启动整理失败") or "启动整理失败")
+        organize_req = OrganizeRequest(drive_index=drive_index)
+        if source_tree_entries is not None:
+            organize_req._prefetched_source_tree_entries = list(source_tree_entries or [])
+        result = await organize_media(organize_req)
+        if result.get("status") == "busy":
+            await asyncio.sleep(1)
+            source_tree_entries = None
+            continue
+        if result.get("status") != "ok":
+            return "", str(result.get("message", "启动整理失败") or "启动整理失败")
 
-            run_id = str(result.get("run_id", "") or "")
-            if not run_id:
-                return "", "缺少 run_id"
+        run_id = str(result.get("run_id", "") or "")
+        if not run_id:
+            return "", "缺少 run_id"
 
-            while True:
-                task = ACTIVE_TASKS.get(run_id, {})
-                status = str(task.get("status", "") or "")
-                if status in ("finished", "error", "stopped"):
-                    return run_id, status
-                await asyncio.sleep(1)
-        finally:
-            with _organize_trigger_lock:
-                _state._organize_running = False
-                if _state._organize_done_event:
-                    _state._organize_done_event.set()
-                    _state._organize_done_event = None
+        while True:
+            task = ACTIVE_TASKS.get(run_id, {})
+            status = str(task.get("status", "") or "")
+            if status in ("finished", "error", "stopped"):
+                return run_id, status
+            await asyncio.sleep(1)
 
 
 def _schedule_or_refresh_source_poll(drive_index: int, source_dir: str, target_dir: str, source_cid: str, *, phase: str = "pre_run"):

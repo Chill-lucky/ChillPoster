@@ -338,6 +338,7 @@ def _task_log(run_id: str, message: str, level: str = "info"):
 def _set_update_task(run_id: str, **kwargs):
     with _UPDATE_TASK_LOCK:
         task = _UPDATE_TASKS.setdefault(run_id, {})
+        task.setdefault("run_id", run_id)
         task.update(kwargs)
         task["updated_at"] = time.time()
 
@@ -459,7 +460,6 @@ def container_action(container_id: str, payload: ContainerActionPayload):
             run_id = f"docker_update_{int(time.time())}_{uuid.uuid4().hex[:8]}"
             _set_update_task(
                 run_id,
-                run_id=run_id,
                 status="running",
                 percent=0,
                 step="queued",

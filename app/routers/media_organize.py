@@ -117,7 +117,8 @@ _DEFAULT_SCRAPE_FIELDS = {
 
 
 def _apply_default_scrape_fields(data: dict) -> dict:
-    data.update(_DEFAULT_SCRAPE_FIELDS)
+    for key, value in _DEFAULT_SCRAPE_FIELDS.items():
+        data.setdefault(key, value)
     return data
 
 
@@ -475,17 +476,36 @@ def _start_organize_thread(run_id: str, req: OrganizeRequest):
     """在后台线程中执行整理任务"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    with _organize_trigger_lock:
-        _state._organize_running = True
     try:
         loop.run_until_complete(_run_organize_async(run_id, req))
     except Exception as e:
         logger.error(f"[MediaOrganize] 整理任务异常: {e}", exc_info=True)
         update_task_progress(run_id, f"整理失败: {e}", 0, "error")
     finally:
-        with _organize_trigger_lock:
-            _state._organize_running = False
+        _finish_organize_run()
         loop.close()
+
+
+def _finish_organize_run():
+    """释放整理运行标记，并唤醒等待自动补跑的协程。"""
+    done_event = None
+    with _organize_trigger_lock:
+        _state._organize_running = False
+        done_event = _state._organize_done_event
+        _state._organize_done_event = None
+    if not done_event:
+        return
+    main_loop = _state._main_event_loop
+    if main_loop and not main_loop.is_closed():
+        try:
+            main_loop.call_soon_threadsafe(done_event.set)
+            return
+        except RuntimeError:
+            pass
+    try:
+        done_event.set()
+    except Exception:
+        pass
 
 
 @router.post("/organize")
@@ -502,8 +522,18 @@ async def organize_media(req: OrganizeRequest):
     drive_index = 0
 
     run_id = f"organize_{uuid.uuid4().hex[:8]}"
+    with _organize_trigger_lock:
+        if _state._organize_running:
+            return {"status": "busy", "message": "已有整理任务正在运行，请稍后再试"}
+        _state._organize_running = True
+        _state._organize_done_event = asyncio.Event()
+
     update_task_progress(run_id, "整理: 准备中...", 0)
-    t = threading.Thread(target=_start_organize_thread, args=(run_id, req), daemon=True)
-    t.start()
+    try:
+        t = threading.Thread(target=_start_organize_thread, args=(run_id, req), daemon=True)
+        t.start()
+    except Exception:
+        _finish_organize_run()
+        raise
     logger.info(f"[MediaOrganize] 后台整理任务已启动: run_id={run_id}")
     return {"status": "ok", "run_id": run_id}

@@ -19,7 +19,7 @@
     <script src="/static/vue.global.js"></script>
     <script src="/static/axios.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=20260518docker-manager-tight">
+    <link rel="stylesheet" href="/static/style.css?v=20260518docker-manager-update-badge-v2">
 
 </head>
 
@@ -3519,7 +3519,7 @@
                                 <div v-if="dockerManager.loading" class="empty-state-card">正在加载容器...</div>
                                 <div v-else-if="filteredDockerContainers.length === 0" class="empty-state-card">暂无容器</div>
                                 <div v-else class="docker-container-grid">
-                                    <div v-for="container in filteredDockerContainers" :key="container.id" class="docker-container-card" :class="{running: container.state === 'running', stopped: container.state !== 'running', updatable: dockerManager.updateMap[container.image]?.update_available}">
+                                    <div v-for="container in filteredDockerContainers" :key="container.id" class="docker-container-card" :class="{running: container.state === 'running', stopped: container.state !== 'running'}">
                                         <div class="docker-card-status-rail"></div>
                                         <div v-if="dockerManager.updateMap[container.image]?.update_available" class="docker-update-corner">
                                             <i class="fa-solid fa-arrow-up"></i><span>NEW</span>
@@ -3535,7 +3535,6 @@
                                                 </div>
                                             </div>
                                             <div class="docker-card-badges">
-                                                <span v-if="dockerManager.updateMap[container.image]?.update_available" class="docker-state-pill warn">有更新</span>
                                                 <span class="docker-state-pill" :class="container.state === 'running' ? 'ok' : 'muted'">{{ container.state === 'running' ? '运行中' : '已停止' }}</span>
                                             </div>
                                         </div>

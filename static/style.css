@@ -2355,13 +2355,10 @@ input:focus, select:focus, textarea:focus {
 .docker-container-card:hover { border-color: rgba(56,189,248,0.3); background: linear-gradient(145deg, rgba(56,189,248,0.08), rgba(255,255,255,0.022)); }
 .docker-container-card.running { border-color: rgba(16,185,129,0.32); }
 .docker-container-card.stopped { opacity: 0.86; }
-.docker-container-card.updatable { border-color: rgba(245,158,11,0.76); background: linear-gradient(145deg, rgba(120,53,15,0.42), rgba(245,158,11,0.09) 48%, rgba(255,255,255,0.025)); box-shadow: 0 0 0 1px rgba(245,158,11,0.22), 0 18px 42px rgba(245,158,11,0.18), 0 12px 30px rgba(0,0,0,0.28); }
-.docker-container-card.updatable:hover { border-color: rgba(251,191,36,0.95); background: linear-gradient(145deg, rgba(146,64,14,0.5), rgba(245,158,11,0.13) 48%, rgba(255,255,255,0.03)); }
 .docker-card-status-rail { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #94a3b8; opacity: 0.7; }
 .docker-container-card.running .docker-card-status-rail { background: #10b981; opacity: 1; }
-.docker-container-card.updatable .docker-card-status-rail { width: 6px; background: linear-gradient(180deg, #fbbf24, #f97316); opacity: 1; box-shadow: 0 0 18px rgba(245,158,11,0.8); }
-.docker-update-corner { position: absolute; top: 0; right: 0; display: inline-flex; align-items: center; gap: 5px; padding: 7px 12px 8px 14px; border-bottom-left-radius: 14px; color: #451a03; background: linear-gradient(135deg, #fbbf24, #f97316); font-size: 12px; font-weight: 900; letter-spacing: 0; box-shadow: 0 10px 24px rgba(245,158,11,0.3); z-index: 1; }
-.docker-update-corner i { font-size: 11px; }
+.docker-update-corner { position: absolute; top: 0; right: 0; display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px 7px 11px; border-bottom-left-radius: 11px; color: #451a03; background: linear-gradient(135deg, #fbbf24, #f97316); font-size: 11px; line-height: 1; font-weight: 900; letter-spacing: 0; box-shadow: 0 8px 18px rgba(245,158,11,0.26); z-index: 1; }
+.docker-update-corner i { font-size: 10px; }
 .docker-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .docker-title-wrap { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .docker-title-wrap strong { display: block; font-size: 20px; line-height: 1.15; color: var(--color-text-main); word-break: break-word; }
@@ -2377,7 +2374,6 @@ input:focus, select:focus, textarea:focus {
 .docker-state-pill.muted { color: #94a3b8; background: rgba(148,163,184,0.1); }
 .docker-state-pill.warn { color: #451a03; background: linear-gradient(135deg, #fbbf24, #f97316); font-weight: 900; box-shadow: 0 8px 18px rgba(245,158,11,0.22); }
 .docker-image-display { border: 1px solid rgba(56,189,248,0.18); border-radius: 12px; padding: 10px 12px; background: rgba(8,47,73,0.13); display: grid; gap: 6px; min-width: 0; }
-.docker-container-card.updatable .docker-image-display { border-color: rgba(245,158,11,0.32); background: rgba(120,53,15,0.16); }
 .docker-image-display.changed { border-color: rgba(192,132,252,0.42); background: rgba(88,28,135,0.16); }
 .docker-image-display span { color: var(--color-text-muted); font-size: 12px; font-weight: 700; }
 .docker-image-display strong { color: var(--color-text-main); font-size: 14px; line-height: 1.4; word-break: break-all; }
@@ -13212,4 +13208,307 @@ html[data-theme="light"] .btn-subscribe:hover { background: #ffffff; }
     left: 0 !important;
     top: auto !important;
     height: 38px !important;
+}
+
+/* Mobile readability hardening: keep the dark standalone shell and text tokens in sync. */
+@media (max-width: 768px) {
+    html.standalone-webapp {
+        --ui-page-bg: #050713;
+        --ui-card-bg: rgba(10, 14, 28, 0.72);
+        --ui-card-bg-hover: rgba(15, 23, 42, 0.82);
+        --ui-border-subtle: rgba(255, 255, 255, 0.11);
+        --ui-border-strong: rgba(255, 255, 255, 0.18);
+        --ui-text-main: #f8fafc;
+        --ui-text-muted: rgba(226, 232, 240, 0.72);
+        --ui-text-subtle: rgba(203, 213, 225, 0.56);
+        --color-bg-base: var(--ui-page-bg);
+        --color-bg-elevated: #080b18;
+        --color-surface: var(--ui-card-bg);
+        --color-surface-hover: var(--ui-card-bg-hover);
+        --color-border: var(--ui-border-subtle);
+        --color-border-strong: var(--ui-border-strong);
+        --color-primary: #f8fafc;
+        --color-primary-soft: rgba(255, 255, 255, 0.08);
+        --color-text-main: var(--ui-text-main);
+        --color-text-muted: var(--ui-text-muted);
+        --color-text-subtle: var(--ui-text-subtle);
+        --bg-dark: var(--color-bg-elevated);
+        --bg-main: var(--color-bg-base);
+        --bg-card: var(--color-surface);
+        --bg-input: rgba(15, 23, 42, 0.74);
+        --accent: var(--color-primary);
+        --text-main: var(--color-text-main);
+        --text-sub: var(--color-text-muted);
+        --border: var(--color-border);
+        --accent-rgb: 248, 250, 252;
+        --mobile-dock-clearance: calc(118px + env(safe-area-inset-bottom));
+    }
+
+    html.standalone-webapp body::after {
+        height: 92px;
+        background: linear-gradient(180deg, rgba(5, 7, 19, 0), rgba(5, 7, 19, 0.82) 42%, #050713 100%);
+    }
+
+    html.standalone-webapp .main {
+        height: 100dvh !important;
+        max-height: 100dvh !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+    }
+
+    html.standalone-webapp .content-area {
+        flex: 1 1 auto !important;
+        height: auto !important;
+        max-height: none !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        background: #050713 !important;
+    }
+
+    html.standalone-webapp .dashboard-layout,
+    html.standalone-webapp .scroll-view,
+    html.standalone-webapp .designer-wrap {
+        height: 100% !important;
+        max-height: none !important;
+        min-height: 0 !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-y: contain;
+        background: #050713 !important;
+        padding-bottom: var(--mobile-dock-clearance) !important;
+    }
+
+    html.standalone-webapp .scroll-view .card,
+    html.standalone-webapp .scroll-view .module-card,
+    html.standalone-webapp .scroll-view .inner-panel,
+    html.standalone-webapp .scroll-view .modern-accordion,
+    html.standalone-webapp .scroll-view .template-editor,
+    html.standalone-webapp .scroll-view .rename-editor-card,
+    html.standalone-webapp .scroll-view .notification-card,
+    html.standalone-webapp .scroll-view .resource-card,
+    html.standalone-webapp .scroll-view .lib-card,
+    html.standalone-webapp .scroll-view .subclass-card,
+    html.standalone-webapp .scroll-view .design-tips-card,
+    html.standalone-webapp .scroll-view .info-alert-box,
+    html.standalone-webapp .scroll-view .dir-browser,
+    html.standalone-webapp .scroll-view .strm-browser,
+    html.standalone-webapp .scroll-view .organize-result,
+    html.standalone-webapp .scroll-view .organize-scrape-card,
+    html.standalone-webapp .scroll-view .strm-progress-result,
+    html.standalone-webapp .scroll-view .upload115-task-card,
+    html.standalone-webapp .scroll-view .upload115-job-row,
+    html.standalone-webapp .scroll-view .upload115-record-row,
+    html.standalone-webapp .scroll-view .cleanup-task-card,
+    html.standalone-webapp .scroll-view .rapid-account-card,
+    html.standalone-webapp .scroll-view .upgrade-meta-item,
+    html.standalone-webapp .scroll-view .stat-tile {
+        border-color: rgba(255, 255, 255, 0.11) !important;
+        background:
+            linear-gradient(180deg, rgba(255, 255, 255, 0.085), rgba(255, 255, 255, 0.035)),
+            rgba(10, 14, 28, 0.72) !important;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 14px 34px rgba(0, 0, 0, 0.22) !important;
+    }
+
+    html.standalone-webapp .scroll-view .card-header,
+    html.standalone-webapp .scroll-view .mc-header,
+    html.standalone-webapp .scroll-view .mc-footer,
+    html.standalone-webapp .scroll-view .acc-header,
+    html.standalone-webapp .scroll-view .sa-header {
+        background: rgba(255, 255, 255, 0.045) !important;
+        border-color: rgba(255, 255, 255, 0.08) !important;
+    }
+
+    html.standalone-webapp input,
+    html.standalone-webapp select,
+    html.standalone-webapp textarea,
+    html.standalone-webapp .input-readonly-soft,
+    html.standalone-webapp .strm-path-row input {
+        background-color: rgba(15, 23, 42, 0.74) !important;
+        border-color: rgba(255, 255, 255, 0.11) !important;
+        color: #f8fafc !important;
+    }
+
+    html.standalone-webapp input::placeholder,
+    html.standalone-webapp textarea::placeholder,
+    html.standalone-webapp .input-readonly-soft::placeholder,
+    html.standalone-webapp .strm-path-row input::placeholder {
+        color: rgba(203, 213, 225, 0.5) !important;
+    }
+
+    html.standalone-webapp label,
+    html.standalone-webapp .form-label,
+    html.standalone-webapp .form-row-label,
+    html.standalone-webapp .switch-row-label,
+    html.standalone-webapp .server-toolbar h2,
+    html.standalone-webapp .server-toolbar-title,
+    html.standalone-webapp .mc-title,
+    html.standalone-webapp .card-header {
+        color: rgba(248, 250, 252, 0.92) !important;
+    }
+
+    html.standalone-webapp .media-organize-page .organize-toggle-row::before,
+    html.standalone-webapp .text-muted-2xs,
+    html.standalone-webapp .hint,
+    html.standalone-webapp .input-tip {
+        color: rgba(226, 232, 240, 0.62) !important;
+    }
+
+    html.standalone-webapp .media-organize-page .organize-toggle-item,
+    html.standalone-webapp .media-organize-page .organize-mode-card,
+    html.standalone-webapp .media-organize-page .organize-scrape-label,
+    html.standalone-webapp .media-organize-page .organize-scrape-card {
+        border-color: rgba(255, 255, 255, 0.11) !important;
+        background: rgba(255, 255, 255, 0.055) !important;
+        color: rgba(248, 250, 252, 0.9) !important;
+    }
+
+    html.standalone-webapp .media-organize-page .organize-toggle-item:has(input:checked),
+    html.standalone-webapp .media-organize-page .organize-mode-card.active,
+    html.standalone-webapp .media-organize-page .organize-scrape-label:has(input:checked),
+    html.standalone-webapp .media-organize-page .organize-scrape-card:has(input:checked) {
+        border-color: rgba(52, 211, 153, 0.32) !important;
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.16), rgba(255, 255, 255, 0.05)) !important;
+    }
+
+    html.standalone-webapp .strm-overwrite-segmented {
+        background: rgba(15, 23, 42, 0.62) !important;
+        border-color: rgba(255, 255, 255, 0.11) !important;
+    }
+
+    html.standalone-webapp .strm-overwrite-option {
+        color: rgba(226, 232, 240, 0.72) !important;
+    }
+
+    html.standalone-webapp .strm-overwrite-option.active {
+        background: rgba(255, 255, 255, 0.94) !important;
+        color: #2563eb !important;
+    }
+
+    html.standalone-webapp .strm-browser-item,
+    html.standalone-webapp .organize-result-message,
+    html.standalone-webapp .subclass-card-title,
+    html.standalone-webapp .subclass-preview-main,
+    html.standalone-webapp .empty-state-card {
+        color: rgba(248, 250, 252, 0.9) !important;
+    }
+
+    .missing-episode-page {
+        color: #f8fafc !important;
+    }
+
+    .missing-episode-title-block h2,
+    .missing-episode-list-head h3,
+    .missing-episode-big-number,
+    .missing-episode-summary-card strong,
+    .missing-episode-library-item span,
+    .missing-episode-poster-title {
+        color: #f8fafc !important;
+    }
+
+    .missing-episode-subtitle,
+    .missing-episode-status-head,
+    .missing-episode-total-line,
+    .missing-episode-panel-title,
+    .missing-episode-summary-card span,
+    .missing-episode-list-head p,
+    .missing-episode-library-item strong,
+    .missing-episode-mobile-control-title,
+    .missing-episode-poster-year,
+    .missing-episode-poster-brief {
+        color: rgba(226, 232, 240, 0.72) !important;
+    }
+
+    .missing-episode-filter-btn,
+    .missing-episode-chip-grid button,
+    .missing-episode-mobile-chip-scroll button,
+    .missing-episode-library-item {
+        color: rgba(241, 245, 249, 0.84) !important;
+        background: rgba(255, 255, 255, 0.055) !important;
+        border-color: rgba(255, 255, 255, 0.11) !important;
+    }
+
+    .missing-episode-filter-btn strong,
+    .missing-episode-mobile-chip-scroll button strong {
+        color: #f8fafc !important;
+    }
+
+    .missing-episode-filter-btn.active,
+    .missing-episode-filter-btn:hover,
+    .missing-episode-chip-grid button.active,
+    .missing-episode-chip-grid button:hover,
+    .missing-episode-mobile-chip-scroll button.active,
+    .missing-episode-library-item.active,
+    .missing-episode-library-item:hover {
+        color: #ffffff !important;
+        background: rgba(124, 58, 237, 0.24) !important;
+        border-color: rgba(167, 139, 250, 0.44) !important;
+    }
+
+    .missing-episode-sidebar,
+    .missing-episode-results,
+    .missing-episode-status-card,
+    .missing-episode-mobile-controls,
+    .missing-episode-summary-card {
+        background: rgba(10, 14, 28, 0.68) !important;
+        border-color: rgba(255, 255, 255, 0.1) !important;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 14px 34px rgba(0, 0, 0, 0.22) !important;
+    }
+
+    .missing-episode-summary-card.partial {
+        background: rgba(245, 158, 11, 0.13) !important;
+        border-color: rgba(245, 158, 11, 0.28) !important;
+    }
+
+    .missing-episode-summary-card.missing {
+        background: rgba(59, 130, 246, 0.12) !important;
+        border-color: rgba(96, 165, 250, 0.24) !important;
+    }
+
+    .missing-episode-summary-card.exists {
+        background: rgba(34, 197, 94, 0.12) !important;
+        border-color: rgba(74, 222, 128, 0.24) !important;
+    }
+
+    .missing-episode-summary-card.total {
+        background: rgba(139, 92, 246, 0.15) !important;
+        border-color: rgba(167, 139, 250, 0.28) !important;
+    }
+
+    html.standalone-webapp .info-alert-box,
+    html.standalone-webapp .info-alert-box-title,
+    html.standalone-webapp .server-id-text,
+    html.standalone-webapp .strm-task-meta-label,
+    html.standalone-webapp .strm-overwrite-label,
+    html.standalone-webapp .organize-toggle-label,
+    html.standalone-webapp .organize-scrape-title,
+    html.standalone-webapp .organize-scrape-card-desc,
+    html.standalone-webapp .organize-scrape-card-note {
+        color: rgba(248, 250, 252, 0.9) !important;
+    }
+
+    html.standalone-webapp .info-alert-box .info-content,
+    html.standalone-webapp .emby-sync-desc,
+    html.standalone-webapp .emby-sync-note {
+        color: rgba(226, 232, 240, 0.76) !important;
+    }
+
+    .strm-task-actions-right {
+        width: 100% !important;
+        display: grid !important;
+        grid-template-columns: auto minmax(0, 1fr) !important;
+        justify-content: stretch !important;
+        align-items: center !important;
+        gap: 10px 12px !important;
+        padding-top: 4px;
+    }
+
+    .strm-task-actions-right .ios-switch {
+        justify-self: start;
+    }
+
+    .strm-task-meta-label {
+        min-width: 0;
+        line-height: 1.35;
+    }
 }
