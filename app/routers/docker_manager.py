@@ -1,7 +1,9 @@
 import os
+import threading
 import time
 from typing import Literal
 import urllib.parse
+import uuid
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -12,6 +14,8 @@ from core.logger import logger
 
 
 router = APIRouter(prefix="/api/docker", tags=["DockerManager"])
+_UPDATE_TASKS: dict[str, dict] = {}
+_UPDATE_TASK_LOCK = threading.Lock()
 
 
 class ContainerActionPayload(BaseModel):
@@ -255,7 +259,7 @@ def _check_image_update(api: DockerAPI, image: str) -> dict:
     }
 
 
-def _recreate_container(api: DockerAPI, container_id: str, image: str) -> dict:
+def _recreate_container(api: DockerAPI, container_id: str, image: str, skip_pull: bool = False, progress=None) -> dict:
     image = _require_image_ref(image)
     info = api.inspect_container(container_id)
     old_name = str(info.get("Name") or "").strip("/")
@@ -266,19 +270,30 @@ def _recreate_container(api: DockerAPI, container_id: str, image: str) -> dict:
     backup_name = f"{old_name}-backup-{int(time.time())}"
     payload = build_replacement_container_payload(info, image)
 
-    api.pull_image(image)
+    if not skip_pull:
+        if progress:
+            progress(2, "pull", f"正在拉取最新镜像: {image}")
+        api.pull_image(image)
+    if progress:
+        progress(3, "stop", "正在停止并备份旧容器")
     if was_running:
         api.stop_container(old_id, timeout=20)
     api.rename_container(old_id, backup_name)
     new_id = ""
     try:
+        if progress:
+            progress(4, "create", "正在按原配置创建新容器")
         created = api.create_container(old_name, payload)
         new_id = str((created or {}).get("Id") or "")
         if not new_id:
             raise RuntimeError(f"新容器创建失败: {created}")
+        if progress:
+            progress(5, "start", "正在启动新容器")
         if was_running:
             api.start_container(new_id)
         api.delete_container(old_id, force=True)
+        if progress:
+            progress(6, "done", "容器更新完成")
         return {"id": new_id, "short_id": new_id[:12], "name": old_name, "image": image}
     except Exception:
         logger.error("[DockerManager] 容器更新失败，尝试回滚原容器", exc_info=True)
@@ -294,6 +309,79 @@ def _recreate_container(api: DockerAPI, container_id: str, image: str) -> dict:
         except Exception:
             logger.error("[DockerManager] 容器更新回滚失败", exc_info=True)
         raise
+
+
+def _task_log(run_id: str, message: str, level: str = "info"):
+    with _UPDATE_TASK_LOCK:
+        task = _UPDATE_TASKS.setdefault(run_id, {})
+        logs = task.setdefault("logs", [])
+        logs.append({
+            "time": time.strftime("%H:%M:%S"),
+            "message": str(message),
+            "level": level,
+        })
+        if len(logs) > 200:
+            del logs[:-200]
+
+
+def _set_update_task(run_id: str, **kwargs):
+    with _UPDATE_TASK_LOCK:
+        task = _UPDATE_TASKS.setdefault(run_id, {})
+        task.update(kwargs)
+        task["updated_at"] = time.time()
+
+
+def _update_progress(run_id: str, step_no: int, step_key: str, message: str, level: str = "info"):
+    total = 6
+    _set_update_task(
+        run_id,
+        step=step_key,
+        step_no=step_no,
+        total_steps=total,
+        percent=max(1, min(100, int(step_no / total * 100))),
+        message=message,
+    )
+    _task_log(run_id, message, level)
+
+
+def _run_update_task(run_id: str, container_id: str, image: str):
+    api = DockerAPI(timeout=900)
+    try:
+        image = _require_image_ref(image)
+        _set_update_task(run_id, status="running", percent=3, image=image)
+        _task_log(run_id, f"开始更新容器 {container_id[:12]}")
+
+        _update_progress(run_id, 1, "inspect", "正在读取容器配置")
+        info = api.inspect_container(container_id)
+        name = str(info.get("Name") or "").strip("/") or container_id[:12]
+        _set_update_task(run_id, container_name=name)
+        _task_log(run_id, f"容器: {name}, 镜像: {image}")
+
+        _update_progress(run_id, 2, "pull", f"正在拉取最新镜像: {image}")
+        try:
+            pull_result = api.pull_image(image)
+            if isinstance(pull_result, list):
+                for item in pull_result[-12:]:
+                    if not isinstance(item, dict):
+                        continue
+                    status = item.get("status") or item.get("stream") or ""
+                    detail = item.get("id") or ""
+                    if status:
+                        _task_log(run_id, f"{detail + ': ' if detail else ''}{status}".strip())
+        except Exception as e:
+            _task_log(run_id, str(e), "error")
+            raise RuntimeError(f"拉取镜像失败: {e}")
+
+        def progress(step_no: int, step_key: str, message: str):
+            _update_progress(run_id, step_no, step_key, message)
+
+        result = _recreate_container(api, container_id, image, skip_pull=True, progress=progress)
+        _set_update_task(run_id, status="finished", percent=100, result=result, message="容器更新完成")
+        _task_log(run_id, f"新容器已启动: {result.get('short_id')}")
+    except Exception as e:
+        logger.error(f"[DockerManager] 更新容器任务失败: {e}", exc_info=True)
+        _set_update_task(run_id, status="error", percent=max(1, _UPDATE_TASKS.get(run_id, {}).get("percent", 1)), message=str(e))
+        _task_log(run_id, str(e), "error")
 
 
 @router.get("/status")
@@ -356,11 +444,35 @@ def container_action(container_id: str, payload: ContainerActionPayload):
             api.delete_container(container_id, force=payload.force)
             return {"status": "ok", "message": "容器已删除"}
         if action == "update":
-            result = _recreate_container(api, container_id, payload.image)
-            return {"status": "ok", "message": "容器已更新并重建", "container": result}
+            image = _require_image_ref(payload.image)
+            run_id = f"docker_update_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+            _set_update_task(
+                run_id,
+                run_id=run_id,
+                status="running",
+                percent=0,
+                step="queued",
+                step_no=0,
+                total_steps=6,
+                container_id=container_id,
+                image=image,
+                logs=[],
+                created_at=time.time(),
+                message="更新任务已创建",
+            )
+            threading.Thread(target=_run_update_task, args=(run_id, container_id, image), daemon=True).start()
+            return {"status": "ok", "message": "容器更新任务已启动", "run_id": run_id}
         raise HTTPException(status_code=400, detail="不支持的操作")
     except Exception as e:
         _api_error(e)
+
+
+@router.get("/update_tasks/{run_id}")
+def get_update_task(run_id: str):
+    task = _UPDATE_TASKS.get(run_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="更新任务不存在")
+    return task
 
 
 @router.get("/containers/{container_id}/logs")

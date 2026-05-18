@@ -441,8 +441,21 @@ createApp({
             logsTail: 200,
             lastRefreshAt: 0,
             lastUpdateCheckAt: 0,
+            updateDialog: {
+                visible: false,
+                runId: '',
+                title: '',
+                status: '',
+                percent: 0,
+                stepNo: 0,
+                totalSteps: 6,
+                message: '',
+                logs: [],
+                polling: false,
+            },
         });
         let dockerSilentRefreshTimer = null;
+        let dockerUpdatePollTimer = null;
 
         const loadProjectVersion = async () => {
             try {
@@ -675,6 +688,79 @@ createApp({
             }
         };
 
+        const applyDockerUpdateTask = (task) => {
+            dockerManager.updateDialog.status = task.status || '';
+            dockerManager.updateDialog.percent = Number(task.percent || 0);
+            dockerManager.updateDialog.stepNo = Number(task.step_no || 0);
+            dockerManager.updateDialog.totalSteps = Number(task.total_steps || 6);
+            dockerManager.updateDialog.message = task.message || '';
+            dockerManager.updateDialog.logs = Array.isArray(task.logs) ? task.logs : [];
+            if (task.container_name) {
+                dockerManager.updateDialog.title = `更新容器 ${task.container_name}`;
+            }
+        };
+
+        const stopDockerUpdatePolling = () => {
+            if (dockerUpdatePollTimer) {
+                clearInterval(dockerUpdatePollTimer);
+                dockerUpdatePollTimer = null;
+            }
+            dockerManager.updateDialog.polling = false;
+        };
+
+        const pollDockerUpdateTask = async (runId) => {
+            if (!runId) return;
+            try {
+                const res = await axios.get(`/api/docker/update_tasks/${encodeURIComponent(runId)}`);
+                const task = res.data || {};
+                applyDockerUpdateTask(task);
+                if (['finished', 'error'].includes(task.status)) {
+                    stopDockerUpdatePolling();
+                    if (task.status === 'finished') {
+                        await fetchDockerContainers({ checkUpdates: true });
+                    }
+                }
+            } catch (e) {
+                dockerManager.updateDialog.status = 'error';
+                dockerManager.updateDialog.message = e.response?.data?.detail || e.message || '更新任务状态获取失败';
+                dockerManager.updateDialog.logs.push({
+                    time: new Date().toLocaleTimeString(),
+                    level: 'error',
+                    message: dockerManager.updateDialog.message,
+                });
+                stopDockerUpdatePolling();
+            }
+        };
+
+        const openDockerUpdateDialog = (container, runId, image) => {
+            stopDockerUpdatePolling();
+            Object.assign(dockerManager.updateDialog, {
+                visible: true,
+                runId,
+                title: `更新容器 ${container.name}`,
+                status: 'running',
+                percent: 1,
+                stepNo: 0,
+                totalSteps: 6,
+                message: '更新任务已启动',
+                logs: [{
+                    time: new Date().toLocaleTimeString(),
+                    level: 'info',
+                    message: `准备使用镜像 ${image} 更新 ${container.name}`,
+                }],
+                polling: true,
+            });
+            pollDockerUpdateTask(runId);
+            dockerUpdatePollTimer = setInterval(() => pollDockerUpdateTask(runId), 1500);
+        };
+
+        const closeDockerUpdateDialog = () => {
+            if (dockerManager.updateDialog.status !== 'running') {
+                dockerManager.updateDialog.visible = false;
+                stopDockerUpdatePolling();
+            }
+        };
+
         const runDockerContainerAction = async (container, action) => {
             const actionLabel = { start: '启动', stop: '停止', restart: '重启', remove: '删除', update: '更新镜像并重建' }[action] || action;
             if (['stop', 'restart', 'remove', 'update'].includes(action)) {
@@ -694,7 +780,11 @@ createApp({
                     image,
                 });
                 showToast(res.data?.message || `${actionLabel}已完成`, 'success');
-                await fetchDockerContainers({ checkUpdates: action === 'update' });
+                if (action === 'update' && res.data?.run_id) {
+                    openDockerUpdateDialog(container, res.data.run_id, image);
+                } else {
+                    await fetchDockerContainers({ checkUpdates: action === 'update' });
+                }
             } catch (e) {
                 showToast(`${actionLabel}失败: ` + (e.response?.data?.detail || e.message), 'error');
             } finally {
@@ -4815,6 +4905,7 @@ createApp({
             stopDashboard115Polling();
             stop115UploadPolling();
             stopDockerSilentRefresh();
+            stopDockerUpdatePolling();
             stopConsoleLogStream();
             document.removeEventListener('keydown', handleKeydown);
             window.removeEventListener('resize', handleResize);
@@ -8154,6 +8245,7 @@ createApp({
             dockerManager, filteredDockerContainers, filteredDockerImages, dockerUpdateCount, dockerImageStats,
             fetchDockerStatus, fetchDockerContainers, fetchDockerImages, checkDockerUpdates,
             refreshDockerManager, runDockerContainerAction, openDockerLogs, closeDockerLogs, pullDockerImage, deleteDockerImage, pruneUnusedDockerImages,
+            closeDockerUpdateDialog,
             formatDockerBytes, formatDockerDate,
             cleanup115Tasks, cleanup115Form, cleanup115EditingId, showCreate115Cleanup, cleanup115Browser,
             fetch115CleanupTasks, openCreate115Cleanup, reset115CleanupForm, save115CleanupTask, edit115CleanupTask,

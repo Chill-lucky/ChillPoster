@@ -3465,7 +3465,7 @@
                         </div>
                     </div>
 
-                    <div v-else-if="tab === 'docker_manager'" key="docker_manager" class="scroll-view">
+                    <div v-else-if="tab === 'docker_manager'" key="docker_manager" class="scroll-view docker-manager-view">
                         <div class="content-shell shell-xl docker-manager-shell">
                             <div class="server-toolbar docker-manager-head">
                                 <h2><i class="fa-solid fa-cubes icon-brand-docker"></i> Docker 管理</h2>
@@ -3931,6 +3931,46 @@
                 </div>
             </div>
         </div>
+
+        <transition name="fade">
+            <div v-if="dockerManager.updateDialog.visible" class="confirm-mask docker-update-mask">
+                <div class="docker-update-modal" :class="{ error: dockerManager.updateDialog.status === 'error', done: dockerManager.updateDialog.status === 'finished' }">
+                    <div class="docker-update-header">
+                        <div class="docker-update-title">
+                            <div class="docker-update-icon">
+                                <i class="fa-solid" :class="dockerManager.updateDialog.status === 'error' ? 'fa-xmark' : (dockerManager.updateDialog.status === 'finished' ? 'fa-check' : 'fa-rotate fa-spin')"></i>
+                            </div>
+                            <div>
+                                <strong>{{ dockerManager.updateDialog.title || '更新容器' }}</strong>
+                                <span>{{ dockerManager.updateDialog.message || '准备中...' }}</span>
+                            </div>
+                        </div>
+                        <button class="settings-drawer-close" @click="closeDockerUpdateDialog" :disabled="dockerManager.updateDialog.status === 'running'" title="关闭">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                    <div class="docker-update-progress-row">
+                        <div class="docker-update-progress">
+                            <div class="docker-update-progress-fill" :style="{ width: Math.max(2, Math.min(100, dockerManager.updateDialog.percent || 0)) + '%' }"></div>
+                        </div>
+                        <span>{{ dockerManager.updateDialog.stepNo || 0 }}/{{ dockerManager.updateDialog.totalSteps || 6 }}</span>
+                    </div>
+                    <div class="docker-update-log">
+                        <div v-if="dockerManager.updateDialog.logs.length === 0" class="docker-update-log-empty">等待日志...</div>
+                        <div v-for="(line, idx) in dockerManager.updateDialog.logs" :key="idx" class="docker-update-log-line" :class="line.level || 'info'">
+                            <span>[{{ line.time }}]</span>
+                            <i v-if="line.level === 'error'" class="fa-solid fa-xmark"></i>
+                            <em>{{ line.message }}</em>
+                        </div>
+                    </div>
+                    <div class="docker-update-footer">
+                        <button class="btn btn-secondary" @click="closeDockerUpdateDialog" :disabled="dockerManager.updateDialog.status === 'running'">
+                            {{ dockerManager.updateDialog.status === 'running' ? '更新中...' : '关闭' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </transition>
 
         <transition name="fade">
             <div v-if="selectState.visible" class="confirm-mask">
