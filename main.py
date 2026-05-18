@@ -218,7 +218,9 @@ async def lifespan_ui(app: FastAPI):
     rss_service_instance.load_active_jobs()
     hdhive_service.setup_scheduler(task_service_instance.scheduler)
     drive115_upload_service.start()
-    if telegram_notify_service.should_poll():
+    if telegram_notify_service.should_bot_poll():
+        telegram_notify_service.start_polling()
+    if telegram_notify_service.should_account_monitor():
         telegram_notify_service.start_monitor()
     logger.info("[启动] 基础任务与服务初始化完成")
 
@@ -286,6 +288,7 @@ async def lifespan_ui(app: FastAPI):
     except Exception:
         pass
     telegram_notify_service.stop_monitor()
+    telegram_notify_service.stop_polling()
     try:
         drive115_upload_service.stop()
     except Exception:

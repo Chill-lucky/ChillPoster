@@ -42,6 +42,15 @@ NOTIFICATION_TYPES = {
     }
 }
 
+DEFAULT_NOTIFY_TYPES = {
+    "playback": True,
+    "media_added": True,
+    "organize_complete": True,
+    "resource_transfer": True,
+    "checkin": True,
+    "task_complete": True,
+}
+
 
 class WechatNotifyService:
     """企业微信通知服务 - 支持图文消息"""
@@ -73,13 +82,12 @@ class WechatNotifyService:
                 "proxy_url": "",
                 "encoding_aes_key": "",
                 "admin_whitelist": "",
-                "notify_types": {
-                    "playback": True,
-                    "media_added": True,
-                    "checkin": True,
-                    "task_complete": True
-                }
+                "notify_types": DEFAULT_NOTIFY_TYPES.copy()
             }
+        config["notify_types"] = {
+            **DEFAULT_NOTIFY_TYPES,
+            **(config.get("notify_types") or {}),
+        }
         # 合并通知模板
         config["templates"] = merge_templates(config.get("templates"))
         return config
@@ -94,6 +102,10 @@ class WechatNotifyService:
 
     def update_config(self, new_config: dict):
         """更新配置"""
+        new_config["notify_types"] = {
+            **DEFAULT_NOTIFY_TYPES,
+            **(new_config.get("notify_types") or {}),
+        }
         # 合并通知模板，防止前端未传 templates 时丢失默认模板
         new_config["templates"] = merge_templates(new_config.get("templates"))
         self.config = new_config

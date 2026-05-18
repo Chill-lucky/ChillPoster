@@ -386,7 +386,7 @@ def test_telegram_template():
 # ==========================================
 
 def send_to_all_channels(title: str, description: str, image_url: str = "",
-                         notify_type: str = None):
+                         notify_type: str = None, exclude_channels=None):
     """
     发送通知到所有启用的渠道
 
@@ -395,12 +395,16 @@ def send_to_all_channels(title: str, description: str, image_url: str = "",
         description: 描述
         image_url: 图片URL
         notify_type: 通知类型（用于检查是否启用）
+        exclude_channels: 要跳过的渠道，例如 {"telegram"}
     """
+    exclude_channels = {str(item).lower() for item in (exclude_channels or [])}
     results = {}
-    logger.info(f"[Notify] send_to_all_channels called: type={notify_type}, title={title}")
+    logger.info(f"[Notify] send_to_all_channels called: type={notify_type}, title={title}, exclude={sorted(exclude_channels)}")
 
     # 检查微信是否启用
     wechat_enabled = wechat_notify_service.is_notify_type_enabled(notify_type) if notify_type else wechat_notify_service.get_config().get("enabled")
+    if "wechat" in exclude_channels:
+        wechat_enabled = False
     logger.info(f"[Notify] wechat enabled={wechat_enabled} (type={notify_type})")
     if wechat_enabled:
         results["wechat"] = wechat_notify_service.send_news_message(
@@ -413,6 +417,8 @@ def send_to_all_channels(title: str, description: str, image_url: str = "",
 
     # 检查 Telegram 是否启用
     tg_enabled = telegram_notify_service.is_notify_type_enabled(notify_type) if notify_type else telegram_notify_service.get_config().get("enabled")
+    if "telegram" in exclude_channels:
+        tg_enabled = False
     logger.info(f"[Notify] telegram enabled={tg_enabled} (type={notify_type})")
     if tg_enabled:
         results["telegram"] = telegram_notify_service.send_message_with_image(

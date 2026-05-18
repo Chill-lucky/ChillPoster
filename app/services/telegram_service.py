@@ -33,6 +33,9 @@ class TelegramNotifyService:
 
     def __init__(self):
         self._lock = threading.Lock()
+        self._polling = False
+        self._poll_thread = None
+        self._offset = 0
         self._login_phone = ""
         self._login_phone_code_hash = ""
         self._monitor_thread = None
@@ -60,6 +63,7 @@ class TelegramNotifyService:
             "monitor_reply_enabled": False,
             "transfer_dir_mode": "system",
             "transfer_dir": "",
+            "bot_update_offset": 0,
             "notify_types": {
                 "playback": True,
                 "media_added": True,
@@ -97,7 +101,7 @@ class TelegramNotifyService:
         if isinstance(config, dict):
             data.update(config)
 
-        # Bot Token/Chat ID 只用于通知发送；账号监听走 MTProto session。
+        # Bot Token 用于通知发送和 bot 入站资源解析；账号监听走 MTProto session。
         data["enabled"] = bool(data.get("enabled"))
         if "account_monitor_enabled" not in data and "monitor_enabled" in data:
             data["account_monitor_enabled"] = bool(data.get("monitor_enabled"))
@@ -116,6 +120,10 @@ class TelegramNotifyService:
         if data["transfer_dir_mode"] not in {"system", "custom"}:
             data["transfer_dir_mode"] = "system"
         data["transfer_dir"] = str(data.get("transfer_dir", "") or "").strip()
+        try:
+            data["bot_update_offset"] = max(0, int(data.get("bot_update_offset") or 0))
+        except (TypeError, ValueError):
+            data["bot_update_offset"] = 0
 
         notify_types = data.setdefault("notify_types", {})
         notify_types.setdefault("organize_complete", True)
@@ -171,7 +179,11 @@ class TelegramNotifyService:
         self._save_config()
         # 重新加载代理
         self._load_proxies()
-        if self.should_poll():
+        if self.should_bot_poll():
+            self.start_polling()
+        else:
+            self.stop_polling()
+        if self.should_account_monitor():
             self.start_monitor()
         else:
             self.stop_monitor()
@@ -180,10 +192,18 @@ class TelegramNotifyService:
         """获取配置"""
         data = dict(self.config)
         data["monitor_running"] = self.is_monitor_running()
+        data["bot_polling"] = self.is_bot_polling()
         return data
 
-    def should_poll(self) -> bool:
-        """是否需要启动 Telegram 资源监听。"""
+    def should_bot_poll(self) -> bool:
+        """是否需要启动 Telegram Bot 入站消息轮询。"""
+        return bool(self.config.get("enabled") and self.config.get("bot_token"))
+
+    def is_bot_polling(self) -> bool:
+        return bool(self._polling and self._poll_thread and self._poll_thread.is_alive())
+
+    def should_account_monitor(self) -> bool:
+        """是否需要启动 Telegram 账号资源监听。"""
         return bool(
             self.config.get("account_monitor_enabled")
             and self.config.get("api_id")
@@ -191,6 +211,10 @@ class TelegramNotifyService:
             and self.config.get("phone")
             and self.config.get("selected_dialogs")
         )
+
+    def should_poll(self) -> bool:
+        """兼容旧调用：这里表示是否需要启动账号监听。"""
+        return self.should_account_monitor()
 
     def is_monitor_running(self) -> bool:
         return bool(self._monitor_running and self._monitor_thread and self._monitor_thread.is_alive())
@@ -283,6 +307,7 @@ class TelegramNotifyService:
         status = {
             "authorized": False,
             "monitor_running": self.is_monitor_running(),
+            "bot_polling": self.is_bot_polling(),
             "user": None,
             "message": "未登录",
         }
@@ -292,6 +317,7 @@ class TelegramNotifyService:
         if self._monitor_thread and self._monitor_thread.is_alive():
             status["authorized"] = True
             status["monitor_running"] = self.is_monitor_running()
+            status["bot_polling"] = self.is_bot_polling()
             status["user"] = self._account_user_cache
             status["message"] = "已登录"
             return status
@@ -320,6 +346,7 @@ class TelegramNotifyService:
             return {
                 "authorized": False,
                 "monitor_running": self.is_monitor_running(),
+                "bot_polling": self.is_bot_polling(),
                 "user": None,
                 "message": str(e),
             }
@@ -388,7 +415,7 @@ class TelegramNotifyService:
 
             me = await client.get_me()
             self._account_user_cache = self._format_user(me)
-            if self.should_poll():
+            if self.should_account_monitor():
                 self.start_monitor()
             return {"status": "ok", "message": "Telegram 登录成功", "user": self._account_user_cache}
         except telethon["PhoneCodeInvalidError"]:
@@ -529,7 +556,7 @@ class TelegramNotifyService:
     def update_selected_dialogs(self, selected_dialogs: list[dict]) -> dict:
         self.config["selected_dialogs"] = self._normalize_selected_dialogs(selected_dialogs)
         self._save_config()
-        if self.should_poll():
+        if self.should_account_monitor():
             self.start_monitor()
         else:
             self.stop_monitor()
@@ -588,12 +615,18 @@ class TelegramNotifyService:
         payload = {
             "chat_id": target_chat_id,
             "text": text,
-            "parse_mode": parse_mode
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
 
         if self._send_request("sendMessage", payload):
             logger.debug("[Telegram通知] 消息发送成功")
             return True
+        if parse_mode:
+            payload.pop("parse_mode", None)
+            if self._send_request("sendMessage", payload):
+                logger.debug("[Telegram通知] 消息发送成功（纯文本重试）")
+                return True
         return False
 
     def send_photo(self, photo_url: str, caption: str = "",
@@ -622,8 +655,9 @@ class TelegramNotifyService:
         payload = {
             "chat_id": target_chat_id,
             "photo": photo_url,
-            "parse_mode": parse_mode
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
 
         if caption:
             payload["caption"] = caption
@@ -631,6 +665,11 @@ class TelegramNotifyService:
         if self._send_request("sendPhoto", payload):
             logger.debug("[Telegram通知] 图片发送成功")
             return True
+        if parse_mode:
+            payload.pop("parse_mode", None)
+            if self._send_request("sendPhoto", payload):
+                logger.debug("[Telegram通知] 图片发送成功（纯文本重试）")
+                return True
         return False
 
     def send_message_with_image(self, title: str, description: str,
@@ -981,7 +1020,7 @@ class TelegramNotifyService:
 
     def start_monitor(self):
         """启动 Telegram 用户账号消息监听。"""
-        if not self.should_poll():
+        if not self.should_account_monitor():
             logger.debug("[Telegram账号] 未启用、未登录配置或未选择监听目标，跳过启动")
             return
         with self._lock:
@@ -1010,12 +1049,189 @@ class TelegramNotifyService:
             self._monitor_thread.join(timeout=5)
         self._monitor_running = False
 
-    # 兼容 main.py 以及旧调用名称；这里已经不是 Bot polling。
     def start_polling(self):
-        self.start_monitor()
+        """启动 Telegram Bot long polling，用于接收转发给机器人的资源链接。"""
+        if not self.should_bot_poll():
+            logger.debug("[Telegram通知] 未启用或未配置 token，跳过 polling 启动")
+            return
+        offset = self._initial_bot_update_offset()
+        with self._lock:
+            if self.is_bot_polling():
+                return
+            self._polling = True
+            self._offset = offset
+            self._poll_thread = threading.Thread(
+                target=self._poll_loop,
+                daemon=True,
+                name="telegram-bot-polling",
+            )
+            self._poll_thread.start()
+        logger.info("[Telegram通知] Long polling 已启动")
 
     def stop_polling(self):
-        self.stop_monitor()
+        """停止 Telegram Bot long polling。"""
+        self._polling = False
+        if self._poll_thread and self._poll_thread.is_alive():
+            self._poll_thread.join(timeout=3)
+        if self._poll_thread:
+            logger.info("[Telegram通知] Long polling 已停止")
+        self._poll_thread = None
+
+    def _api_request(self, method: str, payload: dict = None, use_get: bool = False) -> dict:
+        """调用 Telegram Bot API。"""
+        bot_token = self.config.get("bot_token", "")
+        if not bot_token:
+            return {}
+        url = f"https://api.telegram.org/bot{bot_token}/{method}"
+        timeout = 35 if method == "getUpdates" else 30
+        try:
+            if use_get or method == "getUpdates":
+                resp = requests.get(url, params=payload or {}, proxies=self._proxies, timeout=timeout)
+            else:
+                resp = requests.post(url, json=payload or {}, proxies=self._proxies, timeout=timeout)
+            return resp.json()
+        except Exception as e:
+            if self._polling or method != "getUpdates":
+                logger.error(f"[Telegram通知] API 请求异常 ({method}): {e}")
+            return {}
+
+    def _persist_bot_update_offset(self, offset: int):
+        try:
+            offset = max(0, int(offset))
+        except (TypeError, ValueError):
+            return
+        if offset <= int(self.config.get("bot_update_offset") or 0):
+            return
+        self.config["bot_update_offset"] = offset
+        self._save_config()
+
+    def _initial_bot_update_offset(self) -> int:
+        offset = int(self.config.get("bot_update_offset") or 0)
+        if offset > 0:
+            return offset
+
+        # First start after upgrading old configs: skip stale updates Telegram kept
+        # while the bot listener was offline, avoiding surprise duplicate transfers.
+        resp = self._api_request("getUpdates", {
+            "offset": -1,
+            "limit": 1,
+            "timeout": 0,
+            "allowed_updates": ["message"],
+        }, use_get=True)
+        if not resp.get("ok"):
+            return 0
+        result = resp.get("result") or []
+        if not result:
+            return 0
+        try:
+            offset = int(result[-1].get("update_id", -1)) + 1
+        except (TypeError, ValueError):
+            return 0
+        if offset > 0:
+            self._persist_bot_update_offset(offset)
+            logger.info(f"[Telegram通知] 已跳过历史 updates，从 offset={offset} 开始")
+        return offset
+
+    def _poll_loop(self):
+        """Telegram Bot long polling 循环。"""
+        logger.info("[Telegram通知] Polling 循环已开始")
+        while self._polling:
+            try:
+                resp = self._api_request("getUpdates", {
+                    "offset": self._offset,
+                    "timeout": 30,
+                    "allowed_updates": ["message"],
+                })
+                if not resp.get("ok"):
+                    if self._polling:
+                        logger.warning(f"[Telegram通知] getUpdates 失败: {resp}")
+                    import time
+                    time.sleep(5)
+                    continue
+
+                for update in resp.get("result", []) or []:
+                    self._offset = int(update.get("update_id", self._offset)) + 1
+                    self._persist_bot_update_offset(self._offset)
+                    self._handle_update(update)
+            except Exception as e:
+                if self._polling:
+                    logger.error(f"[Telegram通知] Polling 异常: {e}", exc_info=True)
+                    import time
+                    time.sleep(5)
+        logger.info("[Telegram通知] Polling 循环已退出")
+
+    def _extract_message_links(self, msg: dict) -> list[str]:
+        from app.services.transfer_service import transfer_service
+
+        links: list[str] = []
+        for field in ("text", "caption"):
+            value = str(msg.get(field, "") or "")
+            if value:
+                links.extend(transfer_service.extract_links(value))
+
+        for field in ("entities", "caption_entities"):
+            for entity in msg.get(field, []) or []:
+                url = str(entity.get("url", "") or "").strip()
+                if url:
+                    links.extend(transfer_service.extract_links(url))
+
+        reply_markup = msg.get("reply_markup") or {}
+        for row in reply_markup.get("inline_keyboard", []) or []:
+            for button in row or []:
+                if not isinstance(button, dict):
+                    continue
+                url = str(button.get("url", "") or "").strip()
+                if url:
+                    links.extend(transfer_service.extract_links(url))
+                login_url = button.get("login_url") if isinstance(button.get("login_url"), dict) else {}
+                url = str(login_url.get("url", "") or "").strip()
+                if url:
+                    links.extend(transfer_service.extract_links(url))
+
+        return transfer_service._dedupe_links(links)
+
+    def _handle_update(self, update: dict):
+        """处理单条 Telegram Bot update。"""
+        msg = update.get("message") or {}
+        if not isinstance(msg, dict):
+            return
+
+        links = self._extract_message_links(msg)
+        if not links:
+            return
+
+        chat_id = str((msg.get("chat") or {}).get("id", "") or "")
+        logger.info(f"[Telegram通知] 收到 {len(links)} 条资源链接 (chat={chat_id})")
+
+        from app.services.transfer_service import transfer_service
+
+        loop = asyncio.new_event_loop()
+        try:
+            results = loop.run_until_complete(
+                transfer_service.process_links(
+                    links,
+                    source="telegram",
+                    target_dir=self._monitor_transfer_dir(),
+                )
+            )
+            for result in results:
+                reply = result.get("message", "转存完成")
+                if chat_id:
+                    self.send_message(reply, chat_id=chat_id, parse_mode="")
+                try:
+                    from app.routers.wechat_notify import send_to_all_channels
+                    send_to_all_channels(
+                        title=result.get("status", "转存"),
+                        description=result.get("message", ""),
+                        notify_type="resource_transfer",
+                        exclude_channels={"telegram"},
+                    )
+                except Exception as e:
+                    logger.error(f"[Telegram通知] 发送转存通知失败: {e}")
+        except Exception as e:
+            logger.error(f"[Telegram通知] 处理资源消息失败: {e}", exc_info=True)
+        finally:
+            loop.close()
 
     def _monitor_thread_main(self):
         loop = asyncio.new_event_loop()

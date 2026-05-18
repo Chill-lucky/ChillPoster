@@ -128,6 +128,8 @@ class WechatNotifyConfigModel(BaseModel):
     notify_types: dict = {
         "playback": True,
         "media_added": True,
+        "organize_complete": True,
+        "resource_transfer": True,
         "checkin": True,
         "task_complete": True
     }
