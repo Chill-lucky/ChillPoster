@@ -3,6 +3,10 @@ config/*.json
 !config/media_organize_category_rules.json
 config/*.log
 config/*.log.*
+config/*.db
+config/*.db-journal
+config/*.db-wal
+config/*.db-shm
 config/telegram_user.session*
 config/telegram_avatars/
 backups/

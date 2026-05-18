@@ -55,6 +55,7 @@ from app.routers import upgrade
 from app.routers import docker_manager
 from app.routers import drive115_cleanup
 from app.routers import drive115_upload
+from app.routers import system_health
 
 # === [新增] 导入网关全局客户端，用于优雅关闭 ===
 from app.routers.gateway import proxy_client 
@@ -234,6 +235,13 @@ async def lifespan_ui(app: FastAPI):
     except Exception as e:
         logger.warning(f"[启动] Emby 媒体库缓存加载失败: {e}")
 
+    # 后台初始化媒体整理缓存，避免 SQLite 迁移/建索引阻塞 UI 启动。
+    try:
+        from core.media_library_cache import warmup_cache_in_background
+        warmup_cache_in_background()
+    except Exception as e:
+        logger.warning(f"[启动] 媒体整理缓存预热启动失败: {e}")
+
     # 预热发现页扩展源缓存，避免首次请求卡顿
     try:
         from app.routers.discover import _get_reference_sources
@@ -333,6 +341,7 @@ app.include_router(upgrade.router)
 app.include_router(docker_manager.router)
 app.include_router(drive115_cleanup.router)
 app.include_router(drive115_upload.router)
+app.include_router(system_health.router)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/fonts", StaticFiles(directory="fonts"), name="fonts")

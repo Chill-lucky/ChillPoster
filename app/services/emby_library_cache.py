@@ -9,6 +9,7 @@ import time
 from typing import Optional
 
 from core.configs import EMBY_DISCOVER_INDEX_FILE
+from core.cache_db import cache_db
 from core.emby_client import EmbyClient
 from app.routers.config_302 import get_emby_config_by_index_sync
 
@@ -39,6 +40,8 @@ _discover_index_refresh_pending = False
 _discover_index_timer: threading.Timer | None = None
 _discover_index_last_finished_at = 0.0
 _discover_index_pending_reason = ""
+_discover_cache_db_lock = threading.RLock()
+_discover_cache_db_ready = False
 
 
 def _now_ts() -> int:
@@ -861,15 +864,282 @@ def _normalize_episode_counts_for_discover(seasons: dict | None) -> dict[int, se
     return result
 
 
-def _load_discover_index_file() -> dict:
-    if not os.path.exists(EMBY_DISCOVER_INDEX_FILE):
+def _discover_payload_server_idx(payload: dict) -> int:
+    meta = payload.get("_meta") if isinstance(payload, dict) else {}
+    try:
+        return int((meta or {}).get("server_idx", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _json_compact(data) -> str:
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
+def _create_discover_cache_schema(conn) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS discover_index_meta (
+            server_idx INTEGER PRIMARY KEY,
+            version INTEGER NOT NULL,
+            updated_at REAL NOT NULL DEFAULT 0,
+            meta_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS discover_index_keys (
+            server_idx INTEGER NOT NULL,
+            lookup_key TEXT NOT NULL,
+            target_value TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (server_idx, lookup_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_discover_index_keys_value
+            ON discover_index_keys(server_idx, target_value);
+
+        CREATE TABLE IF NOT EXISTS discover_items (
+            server_idx INTEGER NOT NULL,
+            item_key TEXT NOT NULL,
+            tmdb_id TEXT NOT NULL DEFAULT '',
+            media_type TEXT NOT NULL DEFAULT '',
+            library_id TEXT NOT NULL DEFAULT '',
+            emby_id TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            original_title TEXT NOT NULL DEFAULT '',
+            year TEXT NOT NULL DEFAULT '',
+            library_name TEXT NOT NULL DEFAULT '',
+            item_json TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (server_idx, item_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_discover_items_type
+            ON discover_items(server_idx, media_type);
+        CREATE INDEX IF NOT EXISTS idx_discover_items_tmdb_type
+            ON discover_items(server_idx, tmdb_id, media_type);
+        CREATE INDEX IF NOT EXISTS idx_discover_items_emby
+            ON discover_items(server_idx, emby_id);
+
+        CREATE TABLE IF NOT EXISTS discover_series_index (
+            server_idx INTEGER NOT NULL,
+            series_key TEXT NOT NULL,
+            tmdb_id TEXT NOT NULL DEFAULT '',
+            seasons_json TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (server_idx, series_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_discover_series_tmdb
+            ON discover_series_index(server_idx, tmdb_id);
+        """
+    )
+
+
+def _save_discover_index_payload_to_db(conn, payload: dict) -> None:
+    if not isinstance(payload, dict):
+        return
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    if not meta:
+        return
+    server_idx = _discover_payload_server_idx(payload)
+    version = int(meta.get("version", DISCOVER_INDEX_VERSION) or DISCOVER_INDEX_VERSION)
+    updated_at = float(meta.get("updated_at", 0) or time.time())
+    index = payload.get("discover_index") or {}
+    items = payload.get("items") or {}
+    series_index = payload.get("series_index") or {}
+
+    conn.execute("DELETE FROM discover_index_keys WHERE server_idx = ?", (server_idx,))
+    conn.execute("DELETE FROM discover_items WHERE server_idx = ?", (server_idx,))
+    conn.execute("DELETE FROM discover_series_index WHERE server_idx = ?", (server_idx,))
+    conn.execute(
+        """
+        INSERT INTO discover_index_meta(server_idx, version, updated_at, meta_json)
+        VALUES(?, ?, ?, ?)
+        ON CONFLICT(server_idx) DO UPDATE SET
+            version = excluded.version,
+            updated_at = excluded.updated_at,
+            meta_json = excluded.meta_json
+        """,
+        (server_idx, version, updated_at, _json_compact(meta)),
+    )
+    conn.executemany(
+        """
+        INSERT INTO discover_index_keys(server_idx, lookup_key, target_value)
+        VALUES(?, ?, ?)
+        ON CONFLICT(server_idx, lookup_key) DO UPDATE SET target_value = excluded.target_value
+        """,
+        [
+            (server_idx, str(key), str(value))
+            for key, value in (index or {}).items()
+            if str(key or "") and str(value or "")
+        ],
+    )
+
+    item_rows = []
+    for item_key, item in (items or {}).items():
+        if not isinstance(item, dict):
+            continue
+        item_key = str(item_key or "")
+        if not item_key:
+            continue
+        item_rows.append((
+            server_idx,
+            item_key,
+            str(item.get("tmdb_id", "") or ""),
+            str(item.get("media_type", "") or ""),
+            str(item.get("library_id", "") or ""),
+            str(item.get("emby_id", "") or ""),
+            str(item.get("title", "") or ""),
+            str(item.get("original_title", "") or ""),
+            str(item.get("year", "") or ""),
+            str(item.get("library_name", "") or ""),
+            _json_compact(item),
+        ))
+    conn.executemany(
+        """
+        INSERT INTO discover_items(
+            server_idx, item_key, tmdb_id, media_type, library_id, emby_id,
+            title, original_title, year, library_name, item_json
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(server_idx, item_key) DO UPDATE SET
+            tmdb_id = excluded.tmdb_id,
+            media_type = excluded.media_type,
+            library_id = excluded.library_id,
+            emby_id = excluded.emby_id,
+            title = excluded.title,
+            original_title = excluded.original_title,
+            year = excluded.year,
+            library_name = excluded.library_name,
+            item_json = excluded.item_json
+        """,
+        item_rows,
+    )
+
+    series_rows = []
+    for series_key, seasons in (series_index or {}).items():
+        series_key = str(series_key or "")
+        if not series_key or not isinstance(seasons, dict):
+            continue
+        tmdb_id = series_key.split(":", 1)[0]
+        series_rows.append((server_idx, series_key, tmdb_id, _json_compact(seasons)))
+    conn.executemany(
+        """
+        INSERT INTO discover_series_index(server_idx, series_key, tmdb_id, seasons_json)
+        VALUES(?, ?, ?, ?)
+        ON CONFLICT(server_idx, series_key) DO UPDATE SET
+            tmdb_id = excluded.tmdb_id,
+            seasons_json = excluded.seasons_json
+        """,
+        series_rows,
+    )
+
+
+def _load_discover_index_payload_from_db(conn, server_idx: int | None = None) -> dict:
+    if server_idx is None:
+        meta_row = conn.execute(
+            "SELECT * FROM discover_index_meta ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+    else:
+        meta_row = conn.execute(
+            "SELECT * FROM discover_index_meta WHERE server_idx = ?",
+            (int(server_idx or 0),),
+        ).fetchone()
+    if not meta_row:
         return {}
-    data = _read_json_file(EMBY_DISCOVER_INDEX_FILE, {})
-    return data if isinstance(data, dict) else {}
+    server_idx = int(meta_row["server_idx"] or 0)
+    try:
+        meta = json.loads(meta_row["meta_json"] or "{}")
+        if not isinstance(meta, dict):
+            meta = {}
+    except Exception:
+        meta = {}
+    meta.setdefault("version", int(meta_row["version"] or DISCOVER_INDEX_VERSION))
+    meta.setdefault("updated_at", float(meta_row["updated_at"] or 0))
+    meta.setdefault("server_idx", server_idx)
+
+    index_rows = conn.execute(
+        "SELECT lookup_key, target_value FROM discover_index_keys WHERE server_idx = ?",
+        (server_idx,),
+    ).fetchall()
+    item_rows = conn.execute(
+        "SELECT item_key, item_json FROM discover_items WHERE server_idx = ?",
+        (server_idx,),
+    ).fetchall()
+    series_rows = conn.execute(
+        "SELECT series_key, seasons_json FROM discover_series_index WHERE server_idx = ?",
+        (server_idx,),
+    ).fetchall()
+
+    discover_index = {str(row["lookup_key"]): str(row["target_value"]) for row in index_rows}
+    items = {}
+    for row in item_rows:
+        try:
+            item = json.loads(row["item_json"] or "{}")
+            if isinstance(item, dict):
+                items[str(row["item_key"])] = item
+        except Exception:
+            continue
+    series_index = {}
+    for row in series_rows:
+        try:
+            seasons = json.loads(row["seasons_json"] or "{}")
+            if isinstance(seasons, dict):
+                series_index[str(row["series_key"])] = seasons
+        except Exception:
+            continue
+    return {
+        "_meta": meta,
+        "discover_index": discover_index,
+        "series_index": series_index,
+        "items": items,
+    }
+
+
+def _migrate_discover_index_json_if_needed(conn) -> None:
+    row = conn.execute("SELECT COUNT(*) AS count FROM discover_index_meta").fetchone()
+    if row and int(row["count"] or 0) > 0:
+        return
+    if not os.path.exists(EMBY_DISCOVER_INDEX_FILE):
+        return
+    payload = _read_json_file(EMBY_DISCOVER_INDEX_FILE, {})
+    if not isinstance(payload, dict) or not payload:
+        return
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    if int(meta.get("version", 0) or 0) != DISCOVER_INDEX_VERSION:
+        return
+    started = time.time()
+    _save_discover_index_payload_to_db(conn, payload)
+    logger.info(
+        f"[EmbyLibCache] 已迁移 Emby 可用性索引 JSON 到 SQLite: "
+        f"items={len(payload.get('items') or {})} keys={len(payload.get('discover_index') or {})} "
+        f"耗时 {time.time() - started:.1f}s"
+    )
+
+
+def _ensure_discover_cache_schema() -> None:
+    global _discover_cache_db_ready
+    if _discover_cache_db_ready:
+        return
+    with _discover_cache_db_lock:
+        if _discover_cache_db_ready:
+            return
+        with cache_db(write=True) as conn:
+            _create_discover_cache_schema(conn)
+            _migrate_discover_index_json_if_needed(conn)
+        _discover_cache_db_ready = True
+
+
+def _load_discover_index_file(server_idx: int | None = None) -> dict:
+    try:
+        _ensure_discover_cache_schema()
+        with cache_db() as conn:
+            return _load_discover_index_payload_from_db(conn, server_idx)
+    except Exception as e:
+        logger.warning(f"[EmbyLibCache] Emby 可用性索引 SQLite 读取失败: {e}")
+        return {}
 
 
 def _save_discover_index_file(payload: dict) -> None:
-    _atomic_write_json(EMBY_DISCOVER_INDEX_FILE, payload)
+    _ensure_discover_cache_schema()
+    with cache_db(write=True) as conn:
+        _save_discover_index_payload_to_db(conn, payload)
 
 
 def _apply_discover_index_cache(payload: dict, expected_server_idx: int) -> bool:
@@ -895,7 +1165,7 @@ def _apply_discover_index_cache(payload: dict, expected_server_idx: int) -> bool
 
 
 def load_discover_index_cache(server_idx: int = 0) -> bool:
-    payload = _load_discover_index_file()
+    payload = _load_discover_index_file(server_idx)
     if not payload:
         return False
     loaded = _apply_discover_index_cache(payload, server_idx)
@@ -919,8 +1189,63 @@ def get_discover_index_meta() -> dict:
         return dict(_discover_index_meta)
 
 
+def _current_discover_server_idx() -> int:
+    try:
+        with _discover_index_lock:
+            if _discover_index_meta:
+                return int(_discover_index_meta.get("server_idx", _server_idx) or 0)
+    except Exception:
+        pass
+    try:
+        return int(_server_idx or 0)
+    except Exception:
+        return 0
+
+
+def _row_item_json(row) -> dict | None:
+    if not row:
+        return None
+    try:
+        item = json.loads(row["item_json"] or "{}")
+        return item if isinstance(item, dict) else None
+    except Exception:
+        return None
+
+
+def _series_seasons_from_json(raw: str) -> dict[int, set[int]]:
+    try:
+        seasons = json.loads(raw or "{}")
+    except Exception:
+        seasons = {}
+    return _deserialize_discover_series_index({"_": seasons}).get("_", {})
+
+
 def get_discover_item(tmdb_id: str | int | None, media_type: str) -> dict | None:
     key = f"{str(tmdb_id or '').strip()}:{media_type}"
+    try:
+        _ensure_discover_cache_schema()
+        server_idx = _current_discover_server_idx()
+        with cache_db() as conn:
+            row = conn.execute(
+                "SELECT item_json FROM discover_items WHERE server_idx = ? AND item_key = ? LIMIT 1",
+                (server_idx, key),
+            ).fetchone()
+            item = _row_item_json(row)
+            if item:
+                return dict(item)
+            row = conn.execute(
+                """
+                SELECT item_json FROM discover_items
+                WHERE server_idx = ? AND item_key >= ? AND item_key < ?
+                ORDER BY item_key LIMIT 1
+                """,
+                (server_idx, key + ":", key + ";"),
+            ).fetchone()
+            item = _row_item_json(row)
+            if item:
+                return dict(item)
+    except Exception as e:
+        logger.debug(f"[EmbyLibCache] SQLite 读取 discover item 失败: {e}")
     with _discover_index_lock:
         item = _discover_items.get(key)
         if not isinstance(item, dict):
@@ -930,6 +1255,54 @@ def get_discover_item(tmdb_id: str | int | None, media_type: str) -> dict | None
 
 
 def get_discover_series_entries() -> list[dict]:
+    try:
+        _ensure_discover_cache_schema()
+        server_idx = _current_discover_server_idx()
+        with cache_db() as conn:
+            item_rows = conn.execute(
+                """
+                SELECT item_key, item_json FROM discover_items
+                WHERE server_idx = ? AND media_type = 'tv'
+                """,
+                (server_idx,),
+            ).fetchall()
+            series_rows = conn.execute(
+                "SELECT series_key, seasons_json FROM discover_series_index WHERE server_idx = ?",
+                (server_idx,),
+            ).fetchall()
+        series_map = {
+            str(row["series_key"]): _series_seasons_from_json(row["seasons_json"])
+            for row in series_rows
+        }
+        entries = []
+        for row in item_rows:
+            key = str(row["item_key"] or "")
+            item = _row_item_json(row)
+            if not key or not isinstance(item, dict):
+                continue
+            tmdb_id = key.split(":", 1)[0]
+            seasons = series_map.get(key) or series_map.get(tmdb_id, {})
+            normalized_seasons = {}
+            for season, episodes in (seasons or {}).items():
+                try:
+                    normalized_seasons[str(int(season))] = sorted({int(ep) for ep in episodes})
+                except Exception:
+                    continue
+            entries.append({
+                "tmdb_id": str(tmdb_id),
+                "emby_id": item.get("emby_id", ""),
+                "title": item.get("title", ""),
+                "original_title": item.get("original_title", ""),
+                "year": item.get("year", ""),
+                "library_id": item.get("library_id", ""),
+                "library_name": item.get("library_name", "") or "未分类媒体库",
+                "media_type": "tv",
+                "seasons": normalized_seasons,
+            })
+        entries.sort(key=lambda item: (item.get("library_name") or "", item.get("title") or "", item.get("tmdb_id") or ""))
+        return entries
+    except Exception as e:
+        logger.debug(f"[EmbyLibCache] SQLite 读取剧集发现索引失败: {e}")
     with _discover_index_lock:
         entries = []
         for key, item in _discover_items.items():
@@ -1316,6 +1689,33 @@ def lookup_discover_tmdb_id(title: str, year: str, media_type: str) -> str | Non
     norm = _normalize_for_discover(title)
     if not norm:
         return None
+    try:
+        _ensure_discover_cache_schema()
+        server_idx = _current_discover_server_idx()
+        with cache_db() as conn:
+            if year:
+                row = conn.execute(
+                    """
+                    SELECT target_value FROM discover_index_keys
+                    WHERE server_idx = ? AND lookup_key = ?
+                    LIMIT 1
+                    """,
+                    (server_idx, f"title:{norm}:{year}:{media_type}"),
+                ).fetchone()
+                if row and row["target_value"]:
+                    return str(row["target_value"])
+            row = conn.execute(
+                """
+                SELECT target_value FROM discover_index_keys
+                WHERE server_idx = ? AND lookup_key = ?
+                LIMIT 1
+                """,
+                (server_idx, f"title:{norm}:{media_type}"),
+            ).fetchone()
+            if row and row["target_value"]:
+                return str(row["target_value"])
+    except Exception as e:
+        logger.debug(f"[EmbyLibCache] SQLite 查询标题索引失败: {e}")
     with _discover_index_lock:
         if year:
             result = _discover_index.get(f"title:{norm}:{year}:{media_type}")
@@ -1328,6 +1728,22 @@ def discover_tmdb_id_exists(tmdb_id: str | int | None, media_type: str) -> bool:
     tmdb_id = str(tmdb_id or "").strip()
     if not tmdb_id:
         return False
+    try:
+        _ensure_discover_cache_schema()
+        server_idx = _current_discover_server_idx()
+        with cache_db() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM discover_index_keys
+                WHERE server_idx = ? AND lookup_key = ?
+                LIMIT 1
+                """,
+                (server_idx, f"tmdb:{tmdb_id}:{media_type}"),
+            ).fetchone()
+            if row:
+                return True
+    except Exception as e:
+        logger.debug(f"[EmbyLibCache] SQLite 查询 TMDB 索引失败: {e}")
     with _discover_index_lock:
         return f"tmdb:{tmdb_id}:{media_type}" in _discover_index
 
@@ -1336,6 +1752,45 @@ def get_discover_series_status(tmdb_id: str | int | None) -> dict:
     tmdb_id = str(tmdb_id or "").strip()
     if not tmdb_id:
         return {"exists": False, "seasons": {}}
+    try:
+        _ensure_discover_cache_schema()
+        server_idx = _current_discover_server_idx()
+        with cache_db() as conn:
+            exists = conn.execute(
+                """
+                SELECT 1 FROM discover_index_keys
+                WHERE server_idx = ? AND lookup_key = ?
+                LIMIT 1
+                """,
+                (server_idx, f"tmdb:{tmdb_id}:tv"),
+            ).fetchone() is not None
+            row = conn.execute(
+                """
+                SELECT seasons_json FROM discover_series_index
+                WHERE server_idx = ? AND series_key = ?
+                LIMIT 1
+                """,
+                (server_idx, tmdb_id),
+            ).fetchone()
+            if not row:
+                row = conn.execute(
+                    """
+                    SELECT seasons_json FROM discover_series_index
+                    WHERE server_idx = ? AND tmdb_id = ?
+                    ORDER BY series_key LIMIT 1
+                    """,
+                    (server_idx, tmdb_id),
+                ).fetchone()
+        seasons = _series_seasons_from_json(row["seasons_json"]) if row else {}
+        return {
+            "exists": exists,
+            "seasons": {
+                str(season): sorted(episodes)
+                for season, episodes in seasons.items()
+            },
+        }
+    except Exception as e:
+        logger.debug(f"[EmbyLibCache] SQLite 查询剧集状态失败: {e}")
     with _discover_index_lock:
         seasons = _discover_series_index.get(tmdb_id, {})
         normalized = {

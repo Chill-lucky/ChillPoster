@@ -56,7 +56,7 @@ from app.services.media_organize_scrape import (
 from app.services.media_server_refresh import media_server_refresh
 from app.dependencies import ACTIVE_TASKS, update_task_progress
 from core.logger import logger
-from core.media_library_cache import build_task_key, get_task_index, get_task_item_by_id, get_task_items, remove_items_by_path_prefix, remove_task_item_by_id, update_items_path_prefix, update_task_item_fields, upsert_task_item, upsert_dir_item, merge_task_items
+from core.media_library_cache import build_task_key, get_task_index, get_task_item_by_id, remove_items_by_path_prefix, remove_task_item_by_id, update_items_path_prefix, update_task_item_fields, upsert_task_item, upsert_dir_item, merge_task_items
 from core.meta.mediainfo import extract_wash_fields
 
 
@@ -4000,7 +4000,11 @@ async def _process_target_event_entries(
         entries = list(deduped.values())
 
         task_key = build_task_key(drive_index, target_dir)
-        existing_items = get_task_items(task_key)
+        existing_items = {}
+        for entry in entries:
+            item_key = str(entry.get("item_key", "") or "")
+            if item_key:
+                existing_items[item_key] = get_task_item_by_id(task_key, item_key)
         cache_items = {
             entry["item_key"]: entry["cache_item"]
             for entry in entries

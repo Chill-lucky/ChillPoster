@@ -6,6 +6,8 @@ import { useFeedbackDialogs } from './composables/useFeedbackDialogs';
 import { useConsoleLogs } from './composables/useConsoleLogs';
 import { useTaskProgress } from './composables/useTaskProgress';
 import { useShellNavigation } from './composables/useShellNavigation';
+import { useSystemHealth } from './composables/useSystemHealth';
+import { useNetworkConnectivity } from './composables/useNetworkConnectivity';
 import { allSearchItems, allValidTabs, coverItems, dockItems, getPanelIcon, getPanelLabel, settingsItems, storageItems, toolboxItems } from './modules/navigationConfig';
 import { useDockerManager } from './pages/docker/useDockerManager';
 import { useWebhookConfig } from './pages/webhook/useWebhookConfig';
@@ -138,6 +140,28 @@ createApp({
         } = useFeedbackDialogs();
 
         const {
+            systemHealth,
+            systemHealthHeadline,
+            systemHealthMetaText,
+            openSystemHealth,
+            closeSystemHealth,
+            runSystemHealthCheck,
+            getSystemHealthStatusLabel,
+            getSystemHealthStatusIcon,
+        } = useSystemHealth({ showToast });
+
+        const {
+            networkConnectivity,
+            networkConnectivityHeadline,
+            networkConnectivityMetaText,
+            openNetworkConnectivity,
+            closeNetworkConnectivity,
+            runNetworkConnectivityTest,
+            getNetworkStatusLabel,
+            getNetworkStatusIcon,
+        } = useNetworkConnectivity({ showToast });
+
+        const {
             upgradeStatus,
             loadProjectVersion,
             fetchUpgradeStatus,
@@ -176,6 +200,7 @@ createApp({
 
         const {
             consoleLogState,
+            logCategoryOptions,
             filteredLogs,
             logVirtualState,
             logContainerRef,
@@ -1585,6 +1610,12 @@ createApp({
             dashboard115Account, dashboard115Loaded, handleDashboard115CardClick,
             dashboardCovers, wallRows, wallReady, dashboardOverviewLoading, initDashboard, fetchDashboardOverview, formatDashboardPlayedAt, getDeviceMetricState, formatDevicePercent, formatDeviceMemory, getDashboardRecentSubtitle, openDashboardLibrary, openDashboardItem, ensureDashboardServerId,
             toasts, showToast,
+            systemHealth, systemHealthHeadline, systemHealthMetaText,
+            openSystemHealth, closeSystemHealth, runSystemHealthCheck,
+            getSystemHealthStatusLabel, getSystemHealthStatusIcon,
+            networkConnectivity, networkConnectivityHeadline, networkConnectivityMetaText,
+            openNetworkConnectivity, closeNetworkConnectivity, runNetworkConnectivityTest,
+            getNetworkStatusLabel, getNetworkStatusIcon,
             confirmState, handleConfirm,
             selectState, handleSelect, closeSelectDialog,
             numberDialogState, handleNumberDialog, closeNumberDialog,
@@ -1607,7 +1638,7 @@ createApp({
             get115UploadTaskState, format115UploadSize, get115UploadStageLabel, get115UploadMethodLabel,
 
             // [新增] 真实后台日志
-            consoleLogState, filteredLogs, logVirtualState, logContainerRef, onLogScroll, copyLogLine,
+            consoleLogState, logCategoryOptions, filteredLogs, logVirtualState, logContainerRef, onLogScroll, copyLogLine,
             openConsoleLog, closeConsoleLog, reconnectConsoleLogStream, changeConsoleLogLevel, changeConsoleLogCategory, toggleConsoleAutoScroll, clearSystemLogs,
 
             // [新增] RSS 订阅

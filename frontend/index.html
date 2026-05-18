@@ -147,6 +147,12 @@
                     <span>{{ tasksState.hasRunning ? '任务运行中' : '系统就绪' }}</span>
                     <i class="fa-solid fa-chevron-down status-chevron-xs"></i>
                 </div>
+                <button class="dock-topbar-btn dock-topbar-health-btn" @click="closeNetworkConnectivity(); openSystemHealth()" title="系统健康检查">
+                    <i class="fa-solid fa-heart-pulse" :class="{ 'fa-beat': systemHealth.loading }"></i>
+                </button>
+                <button class="dock-topbar-btn dock-topbar-network-btn" @click="closeSystemHealth(); openNetworkConnectivity()" title="网络连通性测试">
+                    <i class="fa-solid fa-network-wired" :class="{ 'fa-beat': networkConnectivity.loading || networkConnectivity.activeTargetId }"></i>
+                </button>
                 <button class="dock-topbar-btn" @click="openConsoleLog" title="容器日志">
                     <i class="fa-solid fa-terminal"></i>
                 </button>
@@ -217,6 +223,14 @@
                 </div>
 
                 <div class="header-inline-actions">
+                    <button class="icon-btn icon-btn-health" @click="closeNetworkConnectivity(); openSystemHealth()" title="系统健康检查">
+                        <i class="fa-solid fa-heart-pulse" :class="{ 'fa-beat': systemHealth.loading }"></i>
+                    </button>
+
+                    <button class="icon-btn icon-btn-network" @click="closeSystemHealth(); openNetworkConnectivity()" title="网络连通性测试">
+                        <i class="fa-solid fa-network-wired" :class="{ 'fa-beat': networkConnectivity.loading || networkConnectivity.activeTargetId }"></i>
+                    </button>
+
                     <button class="icon-btn" @click="openConsoleLog" title="查看后台容器日志">
                         <i class="fa-solid fa-terminal icon-btn-terminal"></i>
                     </button>
@@ -4242,14 +4256,13 @@
                             <button class="log-level-btn" :class="{active: consoleLogState.levelFilter === 'ERROR'}" @click="changeConsoleLogLevel('ERROR')">ERROR</button>
                         </div>
                         <div class="console-log-levels console-log-category-group">
-                            <button class="log-level-btn" :class="{active: consoleLogState.categoryFilter === 'PLAYBACK_302'}" @click="changeConsoleLogCategory(consoleLogState.categoryFilter === 'PLAYBACK_302' ? 'ALL' : 'PLAYBACK_302')">播放302</button>
-                            <button class="log-level-btn" :class="{active: consoleLogState.categoryFilter === 'MEDIA_ORGANIZE'}" @click="changeConsoleLogCategory(consoleLogState.categoryFilter === 'MEDIA_ORGANIZE' ? 'ALL' : 'MEDIA_ORGANIZE')">媒体整理</button>
-                            <button class="log-level-btn" :class="{active: consoleLogState.categoryFilter === 'DRIVE_115'}" @click="changeConsoleLogCategory(consoleLogState.categoryFilter === 'DRIVE_115' ? 'ALL' : 'DRIVE_115')">115网盘</button>
-                            <button class="log-level-btn" :class="{active: consoleLogState.categoryFilter === 'STRM'}" @click="changeConsoleLogCategory(consoleLogState.categoryFilter === 'STRM' ? 'ALL' : 'STRM')">STRM</button>
-                            <button class="log-level-btn" :class="{active: consoleLogState.categoryFilter === 'NOTIFY'}" @click="changeConsoleLogCategory(consoleLogState.categoryFilter === 'NOTIFY' ? 'ALL' : 'NOTIFY')">通知</button>
-                            <button class="log-level-btn" :class="{active: consoleLogState.categoryFilter === 'SCHEDULER'}" @click="changeConsoleLogCategory(consoleLogState.categoryFilter === 'SCHEDULER' ? 'ALL' : 'SCHEDULER')">任务调度</button>
-                            <button class="log-level-btn" :class="{active: consoleLogState.categoryFilter === 'DIAGNOSTIC'}" @click="changeConsoleLogCategory(consoleLogState.categoryFilter === 'DIAGNOSTIC' ? 'ALL' : 'DIAGNOSTIC')">错误诊断</button>
-                            <button class="log-level-btn" :class="{active: consoleLogState.categoryFilter === 'TMDB_SCRAPE'}" @click="changeConsoleLogCategory(consoleLogState.categoryFilter === 'TMDB_SCRAPE' ? 'ALL' : 'TMDB_SCRAPE')">TMDB刮削</button>
+                            <button v-for="option in logCategoryOptions"
+                                    :key="option.value"
+                                    class="log-level-btn"
+                                    :class="{active: consoleLogState.categoryFilter === option.value}"
+                                    @click="changeConsoleLogCategory(consoleLogState.categoryFilter === option.value ? 'ALL' : option.value)">
+                                {{ option.label }}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -4767,6 +4780,145 @@
                 </div>
             </div>
         </template>
+
+        <transition name="system-health-fade">
+            <div v-if="systemHealth.visible" class="system-health-overlay" @click.self="closeSystemHealth">
+                <section class="system-health-panel" :class="'state-' + systemHealth.status">
+                    <div class="system-health-header">
+                        <div class="system-health-title">
+                            <i class="fa-solid fa-gear"></i>
+                            <span>健康检查</span>
+                        </div>
+                        <button class="settings-drawer-close" @click="closeSystemHealth" title="关闭">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+
+                    <div class="system-health-summary">
+                        <div class="system-health-summary-head">
+                            <div>
+                                <div class="system-health-headline">
+                                    <i class="fa-solid" :class="systemHealth.loading ? 'fa-spinner fa-spin' : getSystemHealthStatusIcon(systemHealth.status === 'checking' ? 'warning' : systemHealth.status)"></i>
+                                    <span>{{ systemHealthHeadline }}</span>
+                                </div>
+                                <div class="system-health-meta">{{ systemHealthMetaText }}</div>
+                            </div>
+                            <span class="system-health-percent">{{ Math.round(systemHealth.progress) }}%</span>
+                        </div>
+                        <div class="system-health-progress">
+                            <div class="system-health-progress-fill" :style="{ width: systemHealth.progress + '%' }"></div>
+                        </div>
+                        <div class="system-health-stats">
+                            <div>
+                                <strong>{{ systemHealth.summary.total }}</strong>
+                                <span>总模块数</span>
+                            </div>
+                            <div>
+                                <strong>{{ systemHealth.summary.ok }}</strong>
+                                <span>正常</span>
+                            </div>
+                            <div>
+                                <strong>{{ systemHealth.summary.warning }}</strong>
+                                <span>提醒</span>
+                            </div>
+                            <div>
+                                <strong>{{ systemHealth.summary.error }}</strong>
+                                <span>错误</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="system-health-list">
+                        <div v-if="systemHealth.loading && systemHealth.items.length === 0" class="system-health-loading">
+                            <div class="system-health-skeleton" v-for="i in 6" :key="'health_skeleton_' + i"></div>
+                        </div>
+                        <div v-for="item in systemHealth.items" :key="item.id" class="system-health-item" :class="'health-' + item.status">
+                            <div class="system-health-item-icon">
+                                <i class="fa-solid" :class="item.icon || getSystemHealthStatusIcon(item.status)"></i>
+                            </div>
+                            <div class="system-health-item-body">
+                                <div class="system-health-item-title">
+                                    <span>{{ item.label }} - {{ getSystemHealthStatusLabel(item.status) }}</span>
+                                    <span class="system-health-badge">{{ getSystemHealthStatusLabel(item.status) }}</span>
+                                </div>
+                                <div class="system-health-item-message">{{ item.message }}</div>
+                                <div v-if="item.detail" class="system-health-item-detail">{{ item.detail }}</div>
+                            </div>
+                            <i class="fa-solid system-health-state-icon" :class="getSystemHealthStatusIcon(item.status)"></i>
+                        </div>
+                    </div>
+
+                    <div class="system-health-actions">
+                        <button class="btn btn-secondary btn-sm" @click="runSystemHealthCheck" :disabled="systemHealth.loading">
+                            <i class="fa-solid fa-rotate-right" :class="{ 'fa-spin': systemHealth.loading }"></i>
+                            {{ systemHealth.loading ? '检查中...' : '重新检查' }}
+                        </button>
+                    </div>
+                </section>
+            </div>
+        </transition>
+
+        <transition name="system-health-fade">
+            <div v-if="networkConnectivity.visible" class="system-health-overlay network-connectivity-overlay" @click.self="closeNetworkConnectivity">
+                <section class="system-health-panel network-connectivity-panel" :class="'state-' + networkConnectivity.status">
+                    <div class="system-health-header">
+                        <div class="system-health-title">
+                            <i class="fa-solid fa-display"></i>
+                            <span>网速连通性测试</span>
+                        </div>
+                        <button class="settings-drawer-close" @click="closeNetworkConnectivity" title="关闭">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+
+                    <div class="network-connectivity-status">
+                        <div>
+                            <div class="network-connectivity-headline">
+                                <i :class="networkConnectivity.loading ? 'fa-solid fa-spinner fa-spin' : getNetworkStatusIcon(networkConnectivity.status === 'checking' ? 'warning' : networkConnectivity.status)"></i>
+                                <span>{{ networkConnectivityHeadline }}</span>
+                            </div>
+                            <div class="network-connectivity-meta">{{ networkConnectivityMetaText }}</div>
+                        </div>
+                        <div class="network-connectivity-counts">
+                            <span>{{ networkConnectivity.summary.ok }}</span>
+                            <small>/ {{ networkConnectivity.summary.total }}</small>
+                        </div>
+                    </div>
+
+                    <div class="network-connectivity-list">
+                        <div v-if="networkConnectivity.loading && networkConnectivity.items.length === 0" class="network-connectivity-loading">
+                            <div class="network-connectivity-skeleton" v-for="i in 9" :key="'network_skeleton_' + i"></div>
+                        </div>
+                        <div v-for="item in networkConnectivity.items" :key="item.id" class="network-connectivity-row" :class="'network-' + item.status">
+                            <div class="network-target-logo">
+                                <i :class="item.icon || 'fa-solid fa-globe'"></i>
+                            </div>
+                            <div class="network-target-body">
+                                <div class="network-target-host" :title="item.host">{{ item.host }}</div>
+                                <div class="network-target-meta">
+                                    <span class="network-target-dot"></span>
+                                    <span>{{ getNetworkStatusLabel(item.status) }}</span>
+                                    <span v-if="item.latency_ms !== null && item.latency_ms !== undefined">{{ item.latency_ms }} ms</span>
+                                    <span class="network-target-source">{{ item.label }}</span>
+                                    <span v-if="item.proxy_enabled" class="network-proxy-tag">代理</span>
+                                </div>
+                                <div v-if="item.status !== 'ok' && item.message" class="network-target-message">{{ item.message }}</div>
+                            </div>
+                            <button class="network-target-test-btn" @click="runNetworkConnectivityTest(item.id)" :disabled="networkConnectivity.loading || networkConnectivity.activeTargetId === item.id" title="重新检测此项">
+                                <i :class="networkConnectivity.activeTargetId === item.id ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-plug'"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="system-health-actions">
+                        <button class="btn btn-secondary btn-sm" @click="runNetworkConnectivityTest()" :disabled="networkConnectivity.loading || networkConnectivity.activeTargetId">
+                            <i class="fa-solid fa-rotate-right" :class="{ 'fa-spin': networkConnectivity.loading }"></i>
+                            {{ networkConnectivity.loading ? '检测中...' : '重新检测' }}
+                        </button>
+                    </div>
+                </section>
+            </div>
+        </transition>
 
         <toast-stack :toasts="toasts"></toast-stack>
 

@@ -23,6 +23,7 @@ from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response, RedirectResponse, StreamingResponse
 
 from core.configs import global_config, MISSING_EPISODE_STATS_CACHE_FILE
+from core.cache_db import cache_db
 from app.services.emby_library_cache import (
     build_discover_index,
     discover_tmdb_id_exists,
@@ -1796,6 +1797,8 @@ def _build_missing_episode_libraries_from_entries(entries: list[dict]) -> list[d
 
 
 _missing_episode_stats_lock = threading.RLock()
+_missing_episode_cache_db_lock = threading.RLock()
+_missing_episode_cache_db_ready = False
 MISSING_EPISODE_TMDB_MAX_WORKERS = 12
 MISSING_EPISODE_STATS_CACHE_VERSION = 5
 _missing_episode_stats_state: dict = {
@@ -1807,7 +1810,24 @@ _missing_episode_stats_state: dict = {
 }
 
 
-def _read_missing_episode_stats_cache_file() -> dict:
+def _create_missing_episode_stats_cache_schema(conn) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS missing_episode_stats_cache (
+            cache_key TEXT PRIMARY KEY,
+            version INTEGER NOT NULL,
+            saved_at INTEGER NOT NULL DEFAULT 0,
+            entry_count INTEGER NOT NULL DEFAULT 0,
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_missing_episode_stats_saved_at
+            ON missing_episode_stats_cache(version, saved_at);
+        """
+    )
+
+
+def _legacy_missing_episode_stats_cache_file() -> dict:
     try:
         if not os.path.exists(MISSING_EPISODE_STATS_CACHE_FILE):
             return {}
@@ -1819,12 +1839,108 @@ def _read_missing_episode_stats_cache_file() -> dict:
         return {}
 
 
+def _write_missing_episode_stats_cache_to_db(conn, data: dict) -> None:
+    meta = data.get("_meta") if isinstance(data, dict) else {}
+    payload = data.get("payload") if isinstance(data, dict) else None
+    if not isinstance(meta, dict) or not isinstance(payload, dict):
+        return
+    cache_key = str(meta.get("cache_key") or "")
+    if not cache_key:
+        return
+    version = int(meta.get("version", MISSING_EPISODE_STATS_CACHE_VERSION) or MISSING_EPISODE_STATS_CACHE_VERSION)
+    saved_at = int(meta.get("saved_at", time.time()) or time.time())
+    entry_count = int(meta.get("entry_count", 0) or 0)
+    conn.execute(
+        """
+        INSERT INTO missing_episode_stats_cache(cache_key, version, saved_at, entry_count, payload_json)
+        VALUES(?, ?, ?, ?, ?)
+        ON CONFLICT(cache_key) DO UPDATE SET
+            version = excluded.version,
+            saved_at = excluded.saved_at,
+            entry_count = excluded.entry_count,
+            payload_json = excluded.payload_json
+        """,
+        (cache_key, version, saved_at, entry_count, json.dumps(payload, ensure_ascii=False, separators=(",", ":"))),
+    )
+
+
+def _read_missing_episode_stats_cache_from_db(conn, cache_key: str | None = None) -> dict:
+    if cache_key:
+        row = conn.execute(
+            """
+            SELECT * FROM missing_episode_stats_cache
+            WHERE cache_key = ? AND version = ?
+            LIMIT 1
+            """,
+            (str(cache_key), MISSING_EPISODE_STATS_CACHE_VERSION),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT * FROM missing_episode_stats_cache
+            WHERE version = ?
+            ORDER BY saved_at DESC LIMIT 1
+            """,
+            (MISSING_EPISODE_STATS_CACHE_VERSION,),
+        ).fetchone()
+    if not row:
+        return {}
+    try:
+        payload = json.loads(row["payload_json"] or "{}")
+        if not isinstance(payload, dict):
+            return {}
+    except Exception:
+        return {}
+    return {
+        "_meta": {
+            "version": int(row["version"] or MISSING_EPISODE_STATS_CACHE_VERSION),
+            "cache_key": str(row["cache_key"] or ""),
+            "saved_at": int(row["saved_at"] or 0),
+            "entry_count": int(row["entry_count"] or 0),
+        },
+        "payload": payload,
+    }
+
+
+def _migrate_missing_episode_stats_json_if_needed(conn) -> None:
+    row = conn.execute("SELECT COUNT(*) AS count FROM missing_episode_stats_cache").fetchone()
+    if row and int(row["count"] or 0) > 0:
+        return
+    data = _legacy_missing_episode_stats_cache_file()
+    meta = data.get("_meta") if isinstance(data, dict) else {}
+    if not isinstance(meta, dict) or int(meta.get("version", 0) or 0) != MISSING_EPISODE_STATS_CACHE_VERSION:
+        return
+    _write_missing_episode_stats_cache_to_db(conn, data)
+    logger.info("[Discover] 已迁移缺集统计缓存 JSON 到 SQLite")
+
+
+def _ensure_missing_episode_stats_cache_schema() -> None:
+    global _missing_episode_cache_db_ready
+    if _missing_episode_cache_db_ready:
+        return
+    with _missing_episode_cache_db_lock:
+        if _missing_episode_cache_db_ready:
+            return
+        with cache_db(write=True) as conn:
+            _create_missing_episode_stats_cache_schema(conn)
+            _migrate_missing_episode_stats_json_if_needed(conn)
+        _missing_episode_cache_db_ready = True
+
+
+def _read_missing_episode_stats_cache_file(cache_key: str | None = None) -> dict:
+    try:
+        _ensure_missing_episode_stats_cache_schema()
+        with cache_db() as conn:
+            return _read_missing_episode_stats_cache_from_db(conn, cache_key)
+    except Exception as e:
+        logger.debug(f"[Discover] 读取缺集统计 SQLite 缓存失败: {e}")
+        return {}
+
+
 def _write_missing_episode_stats_cache_file(data: dict) -> None:
-    os.makedirs(os.path.dirname(MISSING_EPISODE_STATS_CACHE_FILE), exist_ok=True)
-    tmp = MISSING_EPISODE_STATS_CACHE_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, MISSING_EPISODE_STATS_CACHE_FILE)
+    _ensure_missing_episode_stats_cache_schema()
+    with cache_db(write=True) as conn:
+        _write_missing_episode_stats_cache_to_db(conn, data)
 
 
 def _normalize_missing_episode_entry_for_cache(entry: dict) -> dict:
@@ -1902,7 +2018,7 @@ def _save_missing_episode_stats_cache(payload: dict, cache_key: str, entries: li
 
 
 def _load_missing_episode_stats_cache(cache_key: str | None = None) -> dict | None:
-    data = _read_missing_episode_stats_cache_file()
+    data = _read_missing_episode_stats_cache_file(cache_key)
     meta = data.get("_meta") if isinstance(data, dict) else {}
     if not isinstance(meta, dict) or meta.get("version") != MISSING_EPISODE_STATS_CACHE_VERSION:
         return None

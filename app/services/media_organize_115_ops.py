@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from typing import Optional, Iterator, Callable, Any
 
 from core.logger import logger
-from core.media_library_cache import get_task_items, upsert_dir_item
+from core.media_library_cache import get_dir_by_parent_and_name, get_dir_by_path, upsert_dir_item
 from app.services.media_organize_state import (
     _read_lock,
     VIDEO_EXTS,
@@ -111,17 +111,15 @@ def _find_cached_dir(task_key: str, parent_id: int, name: str, dir_path: str = "
     if not task_key:
         return "", "", ""
     normalized_path = str(dir_path or "").rstrip("/")
-    parent_match = None
-    items = get_task_items(task_key)
-    for item in items.values():
-        if not item.get("is_dir"):
-            continue
-        if normalized_path and str(item.get("path", "") or "").rstrip("/") == normalized_path:
-            return str(item.get("id", 0) or ""), str(item.get("pickcode", "") or ""), "path"
-        if parent_match is None and item.get("parent_id") == parent_id and item.get("name") == name:
-            parent_match = item
+    if normalized_path:
+        path_match = get_dir_by_path(task_key, normalized_path)
+        if path_match:
+            cid, pickcode = path_match
+            return str(cid or ""), str(pickcode or ""), "path"
+    parent_match = get_dir_by_parent_and_name(task_key, parent_id, name)
     if parent_match:
-        return str(parent_match.get("id", 0) or ""), str(parent_match.get("pickcode", "") or ""), "parent+name"
+        cid, pickcode = parent_match
+        return str(cid or ""), str(pickcode or ""), "parent+name"
     return "", "", ""
 
 

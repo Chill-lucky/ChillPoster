@@ -61,23 +61,92 @@ export function useConsoleLogs({ showToast }) {
         return '📝';
     };
 
-    const LOG_CATEGORY_KEYWORDS = {
-        PLAYBACK_302: ['播放信息接口触发预加载', '后台预加载成功', '后台预加载失败', 'Pickcode模式检测', '从Path提取Pickcode成功', 'Pickcode提取成功', '开始获取直链', '直链获取成功', '命中直链缓存', '收到播放请求', '302重定向到115直链', '收到 STRM 直连请求', 'STRM 302重定向到115直链', '播放通知去重', '115直链获取失败，已降级反向代理', 'STRM 直链获取失败，已降级反向代理'],
-        MEDIA_ORGANIZE: ['[MediaOrganize]', '[媒体库缓存]', '[Wash]', '[CategoryDir]', '[EmbyLib]', '整理:', '洗版'],
-        DRIVE_115: ['[115]', '[115-', '[115Life]', '[Rapid]', '[Sync-', '[115风控', '网盘'],
-        STRM: ['[STRM]', 'STRM', 'strm'],
-        NOTIFY: ['微信', 'wechat', 'Telegram', 'telegram', '通知'],
-        SCHEDULER: ['[Scheduler]', '定时任务', '任务', 'cron'],
-        DIAGNOSTIC: ['失败', '异常', '超时', '990009', '风控', 'Traceback', '错误'],
-        TMDB_SCRAPE: ['TMDb', 'TMDB', '刮削', '元数据', '图片下载'],
-    };
+    const LOG_CATEGORY_DEFINITIONS = [
+        {
+            value: 'SYSTEM',
+            label: '系统启动',
+            keywords: ['[启动]', '[System]', '日志系统', '管理后台', 'UI 端口', '端口映射', '服务已停止', '系统已关闭', '代理配置已更新', '应用代理'],
+        },
+        {
+            value: 'PLAYBACK_302',
+            label: '播放302',
+            keywords: ['[Gateway]', '[Gateway-', '[网关-', '[预缓存', '[Preload]', '[WS]', '[302]', '播放信息接口触发预加载', '后台预加载', 'Pickcode模式检测', '从Path提取Pickcode成功', 'Pickcode提取成功', '开始获取直链', '直链获取成功', '命中直链缓存', '收到播放请求', '302重定向', '收到 STRM 直连请求', '播放通知去重', '反向代理', '转发连接', '转发失败', '响应解析警告'],
+        },
+        {
+            value: 'MEDIA_ORGANIZE',
+            label: '媒体整理',
+            keywords: ['[MediaOrganize]', '[Organizer]', '[MediaIdentify]', '[MediaInfo]', '[媒体库缓存]', '[Wash]', '[CategoryDir]', '[EmbyLib]', '[EmbyLibCache]', '[MediaServerRefresh]', '[115Life]', '媒体整理', '整理任务', '整理:', '洗版', '重命名', 'ffprobe', 'SHA1已存在', '自动整理', '目录刮削', '元数据已生成'],
+        },
+        {
+            value: 'DRIVE_115',
+            label: '115网盘',
+            keywords: ['[115]', '[115-', '[115Life]', '[115Service]', '[Drive115Upload]', '[SignIn]', '[CleanUp]', '[Cleanup]', '[Rapid]', '[Sync-', '[115风控', '[账号: 115]', '115 ', '115清理', '115 清理', '115 定时清空', '115 自动签到', '115 客户端', '网盘', '秒传', '上传', '清空', '签到', 'Pickcode', 'pickcode', '风控'],
+        },
+        {
+            value: 'RESOURCE_TRANSFER',
+            label: '资源转存',
+            keywords: ['[转存]', 'resource_transfer', '资源转存', '资源链接', '转存成功', '转存失败', 'share_receive', 'receive_title', 'recv_folder_count', 'recv_file_count', '分享链接', '转存后台'],
+        },
+        {
+            value: 'STRM',
+            label: 'STRM',
+            keywords: ['[STRM]', 'STRM', 'strm', 'STRM同步', 'STRM 生成', 'STRM 直连', 'STRM 302', '生成 STRM'],
+        },
+        {
+            value: 'RSS_DISCOVER',
+            label: 'RSS/发现',
+            keywords: ['[RSS]', '[Discover]', '[discover]', '[bangumi]', '[Douban]', '[猫眼]', 'RSS', '订阅', '发现页', '发现推荐', '缺集统计', 'Bangumi', 'bangumi', 'Douban', '豆瓣', '猫眼'],
+        },
+        {
+            value: 'NOTIFY',
+            label: '通知',
+            keywords: ['[Notify]', '[EpisodeNotify]', '[Telegram账号]', '[Telegram通知]', '[WeChat]', '[微信]', '[Formatter]', '微信', 'WeChat', 'wechat', 'Telegram', 'telegram', '通知', 'send_to_all_channels', '聚合通知', '入库通知', '签到通知'],
+        },
+        {
+            value: 'WEBHOOK',
+            label: 'Webhook',
+            keywords: ['[Webhook]', 'Webhook', 'webhook', '回调', 'library.new', 'payload'],
+        },
+        {
+            value: 'SCHEDULER',
+            label: '任务调度',
+            keywords: ['[Scheduler]', '[Tasks]', '[Task]', '定时任务', '任务', 'cron', 'Cron', '已装载任务', '执行任务', '自动封面', '调度', 'scheduler'],
+        },
+        {
+            value: 'HDHIVE',
+            label: 'HDHive',
+            keywords: ['[HDHive]', 'HDHive', '影巢', '赌狗签到'],
+        },
+        {
+            value: 'DOCKER_UPGRADE',
+            label: 'Docker升级',
+            keywords: ['[DockerManager]', '[Upgrade]', '[UpgradeHelper]', 'Docker', 'docker', '容器', '镜像', '升级', '更新容器', '回滚'],
+        },
+        {
+            value: 'TMDB_SCRAPE',
+            label: 'TMDB刮削',
+            keywords: ['[TMDb]', 'TMDb', 'TMDB', 'tmdb', 'tmdb=', 'tmdb-', '刮削', '元数据', '图片下载', '图片刮削', 'TMDb详情', 'TMDb失败'],
+        },
+        {
+            value: 'DIAGNOSTIC',
+            label: '错误诊断',
+            keywords: ['失败', '异常', '超时', '错误', '警告', 'Traceback', 'Error', 'Exception', 'unsupported operand', 'errno', 'Errno', '990009', '风控', '连接中断', 'closed the connection', 'Read logs failed', '读取日志失败'],
+        },
+    ];
+    const logCategoryOptions = Object.freeze([
+        { value: 'ALL', label: '全部' },
+        ...LOG_CATEGORY_DEFINITIONS.map(({ value, label }) => ({ value, label })),
+    ]);
 
-    const detectLogCategory = (message) => {
-        const text = String(message || '');
-        for (const [category, keywords] of Object.entries(LOG_CATEGORY_KEYWORDS)) {
-            if (keywords.some(keyword => text.includes(keyword))) return category;
+    const detectLogCategories = (message) => {
+        const text = String(message || '').toLowerCase();
+        const matched = [];
+        for (const category of LOG_CATEGORY_DEFINITIONS) {
+            if (category.keywords.some(keyword => text.includes(String(keyword).toLowerCase()))) {
+                matched.push(category.value);
+            }
         }
-        return 'ALL';
+        return matched;
     };
 
     const parseLogLine = (line) => {
@@ -86,7 +155,8 @@ export function useConsoleLogs({ showToast }) {
         const parts = line.split(' - ');
         let timestamp = '';
         let level = 'INFO';
-        let message = line.trim();
+        let rawMessage = line.trim();
+        let message = rawMessage;
 
         if (parts.length >= 3) {
             const timeParts = parts[0].trim().split(' ');
@@ -94,17 +164,20 @@ export function useConsoleLogs({ showToast }) {
                 timestamp = timeParts[1];
             }
             level = normalizeLogLevel(parts[1].trim());
-            message = parts.slice(2).join(' - ').trim();
-            message = message.replace(/^\[[\w\s]+\]\s*/, '');
+            rawMessage = parts.slice(2).join(' - ').trim();
+            message = rawMessage.replace(/^\[[^\]]{1,40}\]\s*/, '');
         }
 
         const decorated = decorateLogLevel(level);
+        const categories = detectLogCategories(rawMessage);
         return {
             timestamp,
             level,
-            category: detectLogCategory(message),
+            category: categories[0] || 'ALL',
+            categories,
             message,
-            emoji: pickLogEmoji(message, level),
+            rawMessage,
+            emoji: pickLogEmoji(rawMessage, level),
             icon: decorated.icon,
             statusClass: decorated.statusClass,
             badgeClass: decorated.badgeClass
@@ -135,8 +208,11 @@ export function useConsoleLogs({ showToast }) {
         const keyword = (consoleLogState.keywordFilter || '').toLowerCase();
         return parsedLogs.value.filter(item => {
             const levelMatch = level === 'ALL' || item.level === level;
-            const categoryMatch = category === 'ALL' || item.category === category;
-            const keywordMatch = !keyword || item.message.toLowerCase().includes(keyword) || item.level.toLowerCase().includes(keyword);
+            const itemCategories = Array.isArray(item.categories) ? item.categories : [item.category].filter(Boolean);
+            const categoryMatch = category === 'ALL' || itemCategories.includes(category);
+            const rawMessage = String(item.rawMessage || item.message || '').toLowerCase();
+            const displayMessage = String(item.message || '').toLowerCase();
+            const keywordMatch = !keyword || rawMessage.includes(keyword) || displayMessage.includes(keyword) || item.level.toLowerCase().includes(keyword);
             return levelMatch && categoryMatch && keywordMatch;
         });
     });
@@ -157,7 +233,7 @@ export function useConsoleLogs({ showToast }) {
     };
 
     const copyLogLine = (log) => {
-        const text = `[${log.level}] ${log.timestamp} ${log.message}`;
+        const text = `[${log.level}] ${log.timestamp} ${log.rawMessage || log.message}`;
         navigator.clipboard.writeText(text).then(() => showToast('已复制日志', 'success')).catch(() => {});
     };
 
@@ -422,6 +498,7 @@ export function useConsoleLogs({ showToast }) {
 
     return {
         consoleLogState,
+        logCategoryOptions,
         filteredLogs,
         logVirtualState,
         logContainerRef,
