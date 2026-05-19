@@ -407,10 +407,12 @@ def _generate_strm_batch_on_organize(payloads: list[dict], config_data: dict, ca
 
         items: list[dict] = []
         remote_file_paths: list[str] = []
+        replace_remote_paths: list[str] = []
         for payload in payloads or []:
             if cancel_event and cancel_event.is_set():
                 logger.info("[MediaOrganize] STRM 批量生成收到取消信号，停止构建载荷")
                 return 0
+            force_overwrite = bool(payload.get("force_overwrite"))
             batch_items, remote_file_path = _build_strm_items_on_organize(
                 payload.get("result", {}),
                 payload.get("media_type", ""),
@@ -420,12 +422,29 @@ def _generate_strm_batch_on_organize(payloads: list[dict], config_data: dict, ca
             )
             if not batch_items:
                 continue
+            if force_overwrite:
+                for item in batch_items:
+                    item["_force_strm_overwrite"] = True
+            replace_remote_paths.extend([
+                str(p or "").rstrip("/")
+                for p in (payload.get("replace_remote_paths") or [])
+                if str(p or "").rstrip("/")
+            ])
             items.extend(batch_items)
             if remote_file_path:
                 remote_file_paths.append(remote_file_path)
 
         if not items:
             return 0
+
+        for remote_path in dict.fromkeys(replace_remote_paths):
+            if cancel_event and cancel_event.is_set():
+                return 0
+            cleanup_result = strm_service.remove_local_strm_for_remote_file(
+                remote_path,
+                reason="媒体整理洗版替换旧版本",
+            )
+            logger.info(f"[MediaOrganize] 洗版替换已清理旧STRM: {cleanup_result}")
 
         inc_result = strm_service.process_incremental_items(items, cancel_event=cancel_event)
         generated_count = int(inc_result.get("generated", 0) or 0)

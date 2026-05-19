@@ -681,6 +681,54 @@ def _select_existing_candidate(candidates: list[dict], expected_name: str = "") 
     return None, "ambiguous_candidates"
 
 
+def _collect_candidate_associated_subtitles(client, candidate: dict) -> list[dict]:
+    candidate_name = str(candidate.get("name", "") or "")
+    candidate_stem = os.path.splitext(candidate_name)[0]
+    if not candidate_stem:
+        return []
+
+    try:
+        parent_id = int(candidate.get("parent_id", 0) or 0)
+    except (TypeError, ValueError):
+        parent_id = 0
+    if not parent_id:
+        return []
+
+    try:
+        fs = _get_115_fs(client)
+        with _read_lock:
+            siblings = list(fs.iterdir(parent_id))
+    except Exception as e:
+        logger.debug(f"[Wash] 扫描旧字幕失败: parent_id={parent_id}, file={candidate_name}, err={e}")
+        return []
+
+    matched = []
+    seen_ids = set()
+    for sibling in siblings:
+        if sibling.get("is_dir") is True or str(sibling.get("fc", "") or "") == "0":
+            continue
+        sub_name = str(sibling.get("name", "") or "")
+        sub_stem, sub_ext = os.path.splitext(sub_name)
+        if sub_ext.lower() not in SUBTITLE_EXTS:
+            continue
+        if sub_stem != candidate_stem and not sub_stem.startswith(candidate_stem + "."):
+            continue
+        sub_id = sibling.get("id") or sibling.get("fid") or sibling.get("file_id")
+        try:
+            sub_id_int = int(sub_id or 0)
+        except (TypeError, ValueError):
+            sub_id_int = 0
+        if not sub_id_int or sub_id_int in seen_ids:
+            continue
+        seen_ids.add(sub_id_int)
+        matched.append({
+            "id": sub_id_int,
+            "name": sub_name,
+            "path": str(sibling.get("path", "") or ""),
+        })
+    return matched
+
+
 def _count_error_results(results: list[dict]) -> int:
     return sum(1 for item in results if item.get("status") == "error")
 
@@ -807,22 +855,28 @@ def _remove_library_candidate(client, candidate: dict, failed_dir_cid: str = "",
     if not candidate_id:
         return False, "missing_candidate_id"
     try:
+        associated_subtitles = _collect_candidate_associated_subtitles(client, candidate)
+        item_ids = [candidate_id] + [
+            int(sub.get("id", 0) or 0)
+            for sub in associated_subtitles
+            if int(sub.get("id", 0) or 0)
+        ]
         if failed_dir_cid:
             if main_loop is not None:
-                _await_on_main_loop(_move_115_items(client, candidate_id, str(failed_dir_cid)), main_loop)
+                _await_on_main_loop(_move_115_items(client, item_ids, str(failed_dir_cid)), main_loop)
             else:
                 _run_115_write_request_sync(
                     client,
                     "移动旧文件到失败目录",
-                    lambda write_client: write_client.fs_move_app(candidate_id, pid=int(failed_dir_cid), app="android", async_=False),
+                    lambda write_client: write_client.fs_move_app(item_ids, pid=int(failed_dir_cid), app="android", async_=False),
                 )
-            return True, "moved_to_failed"
+            return True, f"moved_to_failed subtitles={len(associated_subtitles)}"
         _run_115_write_request_sync(
             client,
             "删除旧文件",
-            lambda write_client: write_client.fs_delete([candidate_id], async_=False),
+            lambda write_client: write_client.fs_delete(item_ids, async_=False),
         )
-        return True, "deleted"
+        return True, f"deleted subtitles={len(associated_subtitles)}"
     except Exception as e:
         logger.warning(f"[Wash] 处理旧文件失败: id={candidate_id}, err={e}")
         return False, str(e)
@@ -1864,6 +1918,7 @@ async def _run_organize_async(run_id: str, req):
                         )
                         _raise_if_organize_cancelled(run_id)
                         continue
+                    wash_replace_candidate_path = ""
                     if wash_decision == "replace_existing":
                         candidate = wash_result.get("candidate") or {}
                         removed, remove_reason = await loop.run_in_executor(
@@ -1891,6 +1946,7 @@ async def _run_organize_async(run_id: str, req):
                             _raise_if_organize_cancelled(run_id)
                             continue
                         candidate_path = str(candidate.get("path", "") or "")
+                        wash_replace_candidate_path = candidate_path
                         candidate_id_str = str(candidate.get("id", "") or "")
                         cache_removed = False
                         if candidate_id_str:
@@ -1955,6 +2011,8 @@ async def _run_organize_async(run_id: str, req):
                                 pending_strm_payloads=group_pending_strm_payloads,
                                 pending_emby_library_checks=group_pending_emby_library_checks,
                                 pending_refresh_payloads=group_pending_refresh_payloads,
+                                strm_force_overwrite=bool(wash_replace_candidate_path),
+                                strm_replace_remote_paths=[wash_replace_candidate_path] if wash_replace_candidate_path else [],
                             )
                         else:
                             group_failed.append(file_item)
@@ -2019,6 +2077,8 @@ async def _run_organize_async(run_id: str, req):
                         plan["target_base"] = target_base
                         plan["category_path"] = category_path
                         plan["effective_target_cid"] = str(effective_target_cid)
+                        plan["strm_force_overwrite"] = bool(wash_replace_candidate_path)
+                        plan["strm_replace_remote_paths"] = [wash_replace_candidate_path] if wash_replace_candidate_path else []
 
                         keep_incoming, existing_plan, dedupe_reason = await _dedupe_pending_tv_plan_item(
                             config_data,
@@ -2152,6 +2212,8 @@ async def _run_organize_async(run_id: str, req):
                             pending_strm_payloads=group_pending_strm_payloads,
                             pending_emby_library_checks=group_pending_emby_library_checks,
                             pending_refresh_payloads=group_pending_refresh_payloads,
+                            strm_force_overwrite=bool(plan_item.get("strm_force_overwrite")),
+                            strm_replace_remote_paths=list(plan_item.get("strm_replace_remote_paths") or []),
                         )
                     else:
                         group_failed.append(plan_item.get("vf") or {})
@@ -2885,6 +2947,7 @@ def _finalize_organize_result(
     library_index, config_data: dict,
     metadata_executor, pending_library_cache_items: dict,
     pending_strm_payloads: list, pending_emby_library_checks: list, pending_refresh_payloads: list,
+    strm_force_overwrite: bool = False, strm_replace_remote_paths: list[str] | None = None,
 ):
     file_sha1 = vf.get("sha1", "").upper()
 
@@ -3002,6 +3065,8 @@ def _finalize_organize_result(
                 "media_type": strm_ctx.get("media_type", media_type),
                 "pickcode": strm_ctx.get("pickcode", ""),
                 "category_path": strm_ctx.get("category_path", ""),
+                "force_overwrite": bool(strm_force_overwrite),
+                "replace_remote_paths": list(strm_replace_remote_paths or []),
             })
 
     if category_path and category_path != "其他":

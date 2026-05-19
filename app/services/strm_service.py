@@ -934,12 +934,13 @@ def _process_single_item(
         target_dir = os.path.join(local_path, rel_dir) if rel_dir else local_path
 
         file_class = classify_file(filename, video_exts, audio_exts, image_exts, data_exts)
+        force_strm_overwrite = bool(item.get("_force_strm_overwrite"))
 
         if file_class in ("video", "audio") and sync_video:
             strm_name = get_strm_filename(filename)
             strm_path = os.path.join(target_dir, strm_name)
 
-            if overwrite_mode == "skip" and os.path.exists(strm_path):
+            if overwrite_mode == "skip" and not force_strm_overwrite and os.path.exists(strm_path):
                 return ProcessResult("skip", filename, "STRM已存在", None)
 
             if file_class == "video" and min_video_size_mb > 0:

@@ -292,6 +292,26 @@ class TelegramNotifyService:
             proxy=self._build_telethon_proxy(),
         )
 
+    async def _connect_account_client(self, client, purpose: str = "连接 Telegram"):
+        last_error = None
+        for attempt in range(2):
+            try:
+                await asyncio.wait_for(client.connect(), timeout=30)
+                if client.is_connected():
+                    return
+            except Exception as e:
+                last_error = e
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+            if attempt == 0:
+                await asyncio.sleep(1)
+
+        proxy_hint = "，请检查 Telegram 代理配置" if self._build_telethon_proxy() else "，如当前网络无法直连 Telegram 请配置代理"
+        detail = f": {last_error}" if last_error else ""
+        raise RuntimeError(f"{purpose}失败：客户端未连接{proxy_hint}{detail}")
+
     async def _acquire_account_session_lock(self):
         await self._account_session_lock.acquire()
 
@@ -325,7 +345,7 @@ class TelegramNotifyService:
         await self._acquire_account_session_lock()
         client = self._create_account_client()
         try:
-            await client.connect()
+            await self._connect_account_client(client, "检查 Telegram 登录状态")
             authorized = await client.is_user_authorized()
             status["authorized"] = bool(authorized)
             if authorized:
@@ -375,8 +395,15 @@ class TelegramNotifyService:
         await self._acquire_account_session_lock()
         client = self._create_account_client()
         try:
-            await client.connect()
-            sent = await client.send_code_request(self.config["phone"])
+            await self._connect_account_client(client, "发送 Telegram 验证码")
+            try:
+                sent = await client.send_code_request(self.config["phone"])
+            except Exception as e:
+                if "disconnected" not in str(e).lower():
+                    raise
+                logger.warning("[Telegram账号] 发送验证码时连接已断开，准备重连后重试")
+                await self._connect_account_client(client, "重新发送 Telegram 验证码")
+                sent = await client.send_code_request(self.config["phone"])
             self._login_phone = self.config["phone"]
             self._login_phone_code_hash = getattr(sent, "phone_code_hash", "") or ""
             return {"status": "ok", "message": "验证码已发送，请在 Telegram 中查看"}
@@ -397,7 +424,7 @@ class TelegramNotifyService:
         await self._acquire_account_session_lock()
         client = self._create_account_client()
         try:
-            await client.connect()
+            await self._connect_account_client(client, "Telegram 登录")
             if not await client.is_user_authorized():
                 try:
                     if password and not code:
@@ -440,7 +467,7 @@ class TelegramNotifyService:
         await self._acquire_account_session_lock()
         try:
             client = self._create_account_client()
-            await client.connect()
+            await self._connect_account_client(client, "退出 Telegram 登录")
             if await client.is_user_authorized():
                 await client.log_out()
         except Exception as e:
@@ -547,7 +574,7 @@ class TelegramNotifyService:
         await self._acquire_account_session_lock()
         client = self._create_account_client()
         try:
-            await client.connect()
+            await self._connect_account_client(client, "读取 Telegram 会话列表")
             return await self._list_dialogs_with_client(client)
         finally:
             await self._disconnect_account_client(client)
@@ -1290,7 +1317,7 @@ class TelegramNotifyService:
         client = self._create_account_client()
         self._monitor_client = client
         try:
-            await client.connect()
+            await self._connect_account_client(client, "启动 Telegram 监听")
             if not await client.is_user_authorized():
                 logger.warning("[Telegram账号] session 未登录，监听未启动")
                 return
